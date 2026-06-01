@@ -24,16 +24,25 @@
 # Dúvidas devem ser enviadas via fórum no e-Disciplinas.
 
 import datetime
+import csv
+import os
 import pathlib
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import polars as pl
 from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 import argparse
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 #import uniplot
 import random
 from dataclasses import dataclass
@@ -42,23 +51,73 @@ from typing import Callable
 # --- Configuration ---
 DEFAULT_PAST_LEN = 10 * 800
 DEFAULT_FUTURE_LEN = 10 * 200
-DEFAULT_SLIDING_WINDOW_STEP = 50
-DEFAULT_BATCH_SIZE = 32
-DEFAULT_HIDDEN_SIZE = 64
+DEFAULT_SLIDING_WINDOW_STEP = 25
+
+DEFAULT_BATCH_SIZE = 256
+
+DEFAULT_HIDDEN_SIZE = 128
+
 DEFAULT_NUM_EPOCHS = 1000
-DEFAULT_LEARNING_RATE = 1e-4
+
+DEFAULT_LEARNING_RATE = 2e-4 #diminui de 2e-4 para 1e-4 para evitar divergência com a adição da codificação temporal
+DEFAULT_WEIGHT_DECAY = 1e-5
+
 DEFAULT_DATA_FILENAME = "data/santos_ssh.csv"
+
 DEFAULT_TRAIN_TEST_SPLIT_DATE = "2020-06-01 00:00:00"
 DEFAULT_PAST_PLOT_VIEW_SIZE = 200
-DATA_REMOVAL_RATIO = 0.3
+DEFAULT_NUM_WORKERS = 0
 
-DEFAULT_POS_ENCODING_DIM = 16
-DEFAULT_TIME_SCALE = 60.0
+DEFAULT_PREDICTIONS_CSV = "test_predictions.csv"
+DATA_REMOVAL_RATIO = 0
+
+DEFAULT_POS_ENCODING_DIM = 128
+DEFAULT_TIME_SCALE = 1.0
 
 SEED = 100
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
+
+
+def setup_distributed() -> tuple[bool, int, int, int]:
+    """Initializes torch distributed when launched with torchrun."""
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    distributed = world_size > 1
+
+    if distributed:
+        if not torch.cuda.is_available():
+            raise RuntimeError("Distributed training requires CUDA.")
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl")
+
+    return distributed, rank, local_rank, world_size
+
+
+def is_distributed() -> bool:
+    return dist.is_available() and dist.is_initialized()
+
+
+def is_main_process() -> bool:
+    return not is_distributed() or dist.get_rank() == 0
+
+
+def log(message: str) -> None:
+    if is_main_process():
+        print(message)
+
+
+def distributed_barrier(device: torch.device) -> None:
+    if not is_distributed():
+        return
+    if device.type == "cuda":
+        device_id = device.index if device.index is not None else torch.cuda.current_device()
+        dist.barrier(device_ids=[device_id])
+    else:
+        dist.barrier()
 
 
 @dataclass(slots=True)
@@ -119,8 +178,8 @@ def split_data(
     train_df = df.filter(pl.col("datetime") < split_date)
     test_df = df.filter(pl.col("datetime") >= split_date)
 
-    print(f"Train set size: {len(train_df)}")
-    print(f"Test set size: {len(test_df)}")
+    log(f"Train set size: {len(train_df)}")
+    log(f"Test set size: {len(test_df)}")
 
     return train_df, test_df
 
@@ -195,6 +254,10 @@ def prepare_dataloaders(
     future_len: int,
     batch_size: int,
     sliding_window_step: int,
+    num_workers: int,
+    distributed: bool,
+    rank: int,
+    world_size: int,
 ) -> tuple[DataLoader, DataLoader]:
     """Creates sequences and prepares PyTorch DataLoaders.
 
@@ -210,7 +273,7 @@ def prepare_dataloaders(
         tuple: Training and testing DataLoaders.
     """
 
-    print("Creating sequences and dataloaders...")
+    log("Creating sequences and dataloaders...")
     (x_train, x_train_timestamps, x_train_lengths), (
         y_train,
         y_train_timestamps,
@@ -232,8 +295,8 @@ def prepare_dataloaders(
         step=sliding_window_step,
     )
 
-    print(f"x_train shape: {x_train.shape}, y_train shape: {y_train.shape}")
-    print(f"x_test shape: {x_test.shape}, y_test shape: {y_test.shape}")
+    log(f"x_train shape: {x_train.shape}, y_train shape: {y_train.shape}")
+    log(f"x_test shape: {x_test.shape}, y_test shape: {y_test.shape}")
 
     train_dataset = TensorDataset(
         x_train,
@@ -243,7 +306,26 @@ def prepare_dataloaders(
         y_train_timestamps,
         y_train_lengths,
     )
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_sampler = (
+        DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            seed=SEED,
+        )
+        if distributed
+        else None
+    )
+    pin_memory = torch.cuda.is_available()
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
     test_dataset = TensorDataset(
         x_test,
@@ -253,7 +335,13 @@ def prepare_dataloaders(
         y_test_timestamps,
         y_test_lengths,
     )
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
 
     return (
         train_dataloader,
@@ -261,7 +349,12 @@ def prepare_dataloaders(
     )
 
 
-def data_preparation(args: argparse.Namespace) -> PreparedData:
+def data_preparation(
+    args: argparse.Namespace,
+    distributed: bool,
+    rank: int,
+    world_size: int,
+) -> PreparedData:
     """Loads, splits, scales, and converts the data into dataloaders."""
 
     file_path = pathlib.Path(args.data_filename)
@@ -278,7 +371,7 @@ def data_preparation(args: argparse.Namespace) -> PreparedData:
         torch.tensor(train_std.row(0), dtype=torch.float32),
     )
 
-    print(f"Scaling data using Train Mean: {train_mean}, Train Std: {train_std}")
+    log(f"Scaling data using Train Mean: {train_mean}, Train Std: {train_std}")
 
     train_data_scaled = train_df.with_columns(
         [
@@ -333,6 +426,10 @@ def data_preparation(args: argparse.Namespace) -> PreparedData:
         future_len=int(args.future_len),
         batch_size=int(args.batch_size),
         sliding_window_step=int(args.sliding_window_step),
+        num_workers=int(args.num_workers),
+        distributed=distributed,
+        rank=rank,
+        world_size=world_size,
     )
 
     return PreparedData(
@@ -440,7 +537,7 @@ class ARModel(nn.Module):
     def decode(self, h_n: torch.Tensor, y_timestamps: torch.Tensor, y_lengths: torch.Tensor, origin_timestamp: torch.Tensor) -> torch.Tensor:
         """Decodes the sequence autoregressively."""
         
-        max_target_length = int(y_lengths.max().item())
+        max_target_length = y_timestamps.size(1)
 
 
         y_timestamps = self._timestamps_to_2d(
@@ -468,7 +565,11 @@ class ARModel(nn.Module):
 
         out, _ = self.decoder(y_packed, h_n)
 
-        out = nn.utils.rnn.pad_packed_sequence(out, batch_first=True)[0]
+        out = nn.utils.rnn.pad_packed_sequence(
+            out,
+            batch_first=True,
+            total_length=max_target_length,
+        )[0]
 
         y_hat = self.linear(out)
 
@@ -511,7 +612,11 @@ def run_train_epoch(
 ) -> float:
     model.train()
 
-    progress_bar = tqdm(dataloader, desc="Training")
+    progress_bar = tqdm(
+        dataloader,
+        desc="Training",
+        disable=not is_main_process() or os.environ.get("DISABLE_TQDM") == "1",
+    )
 
     losses = []
     # Use enumerate to get batch index for plotting
@@ -523,15 +628,22 @@ def run_train_epoch(
         target_timestamps,
         target_lengths,
     ) in progress_bar:
-        inputs = input_features.to(device)
-        input_timestamps = input_timestamps.to(device)
-        target_timestamps = target_timestamps.to(device)
-        targets = target_features.to(device)
+        using_data_parallel = isinstance(model, nn.DataParallel)
 
         optimizer.zero_grad()
 
         max_target_length = int(target_lengths.max().item())
-        targets = targets[:, :max_target_length]
+        targets = target_features[:, :max_target_length].to(device)
+        target_timestamps = target_timestamps[:, :max_target_length]
+        if using_data_parallel:
+            inputs = input_features
+            input_timestamps = input_timestamps
+        else:
+            inputs = input_features.to(device)
+            input_timestamps = input_timestamps.to(device)
+            target_timestamps = target_timestamps.to(device)
+            input_lengths = input_lengths.to(device)
+            target_lengths = target_lengths.to(device)
 
         outputs = model(
             inputs,
@@ -570,7 +682,11 @@ def run_eval_epoch(
 ) -> EvaluationResult:
     model.eval()
 
-    progress_bar = tqdm(dataloader, desc="Testing")
+    progress_bar = tqdm(
+        dataloader,
+        desc="Testing",
+        disable=not is_main_process() or os.environ.get("DISABLE_TQDM") == "1",
+    )
 
     total_loss = 0.0
     num_batches = 0
@@ -581,21 +697,28 @@ def run_eval_epoch(
     all_predictions: list[np.ndarray] = []
 
     for (
-        input_features,
-        input_timestamps,
-        input_lengths,
-        target_features,
-        target_timestamps,
+            input_features,
+            input_timestamps,
+            input_lengths,
+            target_features,
+            target_timestamps,
         target_lengths,
     ) in progress_bar:
         with torch.no_grad():
-            inputs = input_features.to(device)
-            input_timestamps = input_timestamps.to(device)
-            target_timestamps = target_timestamps.to(device)
-            targets = target_features.to(device)
+            using_data_parallel = isinstance(model, nn.DataParallel)
 
             max_target_length = int(target_lengths.max().item())
-            targets = targets[:, :max_target_length]
+            targets = target_features[:, :max_target_length].to(device)
+            target_timestamps = target_timestamps[:, :max_target_length]
+            if using_data_parallel:
+                inputs = input_features
+                input_timestamps = input_timestamps
+            else:
+                inputs = input_features.to(device)
+                input_timestamps = input_timestamps.to(device)
+                target_timestamps = target_timestamps.to(device)
+                input_lengths = input_lengths.to(device)
+                target_lengths = target_lengths.to(device)
             
             predictions = model(
                 inputs,
@@ -658,17 +781,84 @@ def run_eval_epoch(
     )
 
 
-def plot_results(train_losses: list[float], test_losses: list[float], epoch: int) -> None:
+def export_test_predictions_csv(
+    eval_result: EvaluationResult,
+    output_path: pathlib.Path,
+) -> None:
+    """Exports denormalized test targets, predictions, and cumulative mean loss."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=["window_id", "step", "Y", "Y_hat", "loss", "loss_media_acumulada"],
+        )
+        writer.writeheader()
+
+        cumulative_loss = 0.0
+        row_count = 0
+        for window_id, (target, prediction) in enumerate(
+            zip(eval_result.targets, eval_result.predictions)
+        ):
+            target = np.asarray(target)
+            prediction = np.asarray(prediction)
+            for step in range(target.shape[0]):
+                y = float(target[step, 0])
+                y_hat = float(prediction[step, 0])
+                loss = (y - y_hat) ** 2
+                cumulative_loss += loss
+                row_count += 1
+                writer.writerow(
+                    {
+                        "window_id": window_id,
+                        "step": step,
+                        "Y": y,
+                        "Y_hat": y_hat,
+                        "loss": loss,
+                        "loss_media_acumulada": cumulative_loss / row_count,
+                    }
+                )
+
+    print(f"Test predictions CSV saved to {output_path}")
+
+
+def plot_results(
+    train_losses: list[float],
+    test_losses: list[float],
+    epoch: int,
+    hyperparameters: dict[str, object],
+) -> None:
     """Plots training and testing loss curves."""
-    plt.figure(figsize=(10, 5))
-    plt.plot(range(1, epoch + 1), train_losses, label="Training Loss")
-    plt.plot(range(1, epoch + 1), test_losses, label="Test Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Normalized Loss (MSE)")
-    plt.title("Training and Test Loss Over Epochs")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("loss_curve.png")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(range(1, epoch + 1), train_losses, label="Training Loss")
+    ax.plot(range(1, epoch + 1), test_losses, label="Test Loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Normalized Loss (MSE)")
+    ax.set_title("Training and Test Loss Over Epochs")
+    ax.legend()
+    ax.grid(True)
+
+    hyperparameter_text = "\n".join(
+        f"{name}: {value}" for name, value in hyperparameters.items()
+    )
+    ax.text(
+        0.98,
+        0.98,
+        hyperparameter_text,
+        transform=ax.transAxes,
+        va="top",
+        ha="right",
+        fontsize=9,
+        bbox={
+            "boxstyle": "round,pad=0.45",
+            "facecolor": "white",
+            "edgecolor": "0.7",
+            "alpha": 0.9,
+        },
+    )
+
+    fig.tight_layout()
+    fig.savefig("loss_curve.png", dpi=150)
     plt.show()
     plt.close()
 
@@ -715,11 +905,14 @@ def plot_epoch_results(
 
 
 def plot_training_history(
-    train_losses: list[float], test_losses: list[float], num_epochs: int
+    train_losses: list[float],
+    test_losses: list[float],
+    num_epochs: int,
+    hyperparameters: dict[str, object],
 ) -> None:
     """Plots the aggregated training and evaluation losses."""
 
-    plot_results(train_losses, test_losses, num_epochs)
+    plot_results(train_losses, test_losses, num_epochs, hyperparameters)
 
 
 def training_loop(
@@ -735,12 +928,15 @@ def training_loop(
 ) -> tuple[list[float], list[float]]:
     """Runs the epoch loop and collects training metrics."""
 
-    print("\n--- Starting Training ---")
+    log("\n--- Starting Training ---")
     train_losses = []
     test_losses = []
 
     for epoch in range(1, num_epochs + 1):
-        print(f"\nEpoch {epoch}/{num_epochs}")
+        if hasattr(train_dataloader.sampler, "set_epoch"):
+            train_dataloader.sampler.set_epoch(epoch)
+
+        log(f"\nEpoch {epoch}/{num_epochs}")
 
         train_loss = run_train_epoch(
             model=model,
@@ -749,37 +945,47 @@ def training_loop(
             criterion=criterion,
             device=device,
         )
+        if is_distributed():
+            train_loss_tensor = torch.tensor(train_loss, device=device)
+            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
+            train_loss = float(train_loss_tensor.item() / dist.get_world_size())
         train_losses.append(train_loss)
-        print(f"Average Training Loss: {train_loss:.4f}")
+        log(f"Average Training Loss: {train_loss:.4f}")
 
-        eval_result = run_eval_epoch(
-            model=model,
-            dataloader=test_dataloader,
-            criterion=criterion,
-            device=device,
-            norm_statistics=norm_statistics,
-        )
+        distributed_barrier(device)
 
-        test_loss = eval_result.avg_loss
+        if is_main_process():
+            eval_model = model.module if is_distributed() and hasattr(model, "module") else model
+            eval_result = run_eval_epoch(
+                model=eval_model,
+                dataloader=test_dataloader,
+                criterion=criterion,
+                device=device,
+                norm_statistics=norm_statistics,
+            )
 
-        test_losses.append(test_loss)
-        print(f"Average Test Loss: {test_loss:.4f}")
+            test_loss = eval_result.avg_loss
 
-        plot_epoch_results(
-            epoch=epoch,
-            eval_result=eval_result,
-            view_size=view_size,
-        )
+            test_losses.append(test_loss)
+            log(f"Average Test Loss: {test_loss:.4f}")
 
-        #uniplot.plot(
-         #   ys=[train_losses, test_losses],
-          #  xs=[np.arange(1, epoch + 1)] * 2,
-           # color=True,
-            #legend_labels=["Train Loss", "Test Loss"],
-            #title=f"Epoch: {epoch} Loss Curves",
-        #)
+            plot_epoch_results(
+                epoch=epoch,
+                eval_result=eval_result,
+                view_size=view_size,
+            )
 
-    print("\n--- Training Complete ---")
+            #uniplot.plot(
+             #   ys=[train_losses, test_losses],
+              #  xs=[np.arange(1, epoch + 1)] * 2,
+               # color=True,
+                #legend_labels=["Train Loss", "Test Loss"],
+                #title=f"Epoch: {epoch} Loss Curves",
+            #)
+
+        distributed_barrier(device)
+
+    log("\n--- Training Complete ---")
     return train_losses, test_losses
 
 
@@ -799,11 +1005,42 @@ def criterion_without_padding(loss_func:torch.nn.Module) -> Callable[[torch.Tens
 
 def main(args: argparse.Namespace) -> None:
     """Main function to run the training and evaluation."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
-    print(f"Using device: {device}")
+    distributed, rank, local_rank, world_size = setup_distributed()
+    cpu_count = os.cpu_count() or 1
+    threads_per_process = max(1, cpu_count // world_size)
+    torch.set_num_threads(threads_per_process)
+    torch.set_num_interop_threads(max(1, min(8, threads_per_process)))
 
-    prepared_data = data_preparation(args)
+    device = torch.device(
+        f"cuda:{local_rank}" if distributed else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
+    cuda_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+    # device = torch.device("cpu")
+    log(f"Using device: {device}")
+    log(f"CPU threads per process: {torch.get_num_threads()}")
+    log(f"CUDA devices available: {cuda_count}")
+    if distributed:
+        log(f"Using DistributedDataParallel with {world_size} GPUs")
+    log(
+        "Hyperparameters: "
+        f"batch_size_per_process={args.batch_size}, "
+        f"effective_batch_size={args.batch_size * world_size}, "
+        f"hidden_size={args.hidden_size}, "
+        f"pos_encoding_dim={args.pos_encoding_dim}, "
+        f"learning_rate={args.learning_rate}, "
+        f"weight_decay={args.weight_decay}, "
+        f"sliding_window_step={args.sliding_window_step}"
+    )
+
+    prepared_data = data_preparation(
+        args=args,
+        distributed=distributed,
+        rank=rank,
+        world_size=world_size,
+    )
     feature_names = prepared_data.feature_names
     norm_statistics = prepared_data.norm_statistics
     train_dataloader = prepared_data.train_dataloader
@@ -818,9 +1055,22 @@ def main(args: argparse.Namespace) -> None:
         pos_encoding_dim=args.pos_encoding_dim,
         time_scale=args.time_scale,
     ).to(device)
+    if distributed:
+        model = nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            broadcast_buffers=False,
+        )
+    elif cuda_count > 1:
+        log("Multiple GPUs detected; launch with torchrun to use all GPUs safely.")
     
     criterion = criterion_without_padding(nn.MSELoss())
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
 
     view_size = int(args.past_view_size)
     train_losses, test_losses = training_loop(
@@ -837,13 +1087,42 @@ def main(args: argparse.Namespace) -> None:
 
     # --- Save Model ---
     model_save_path = pathlib.Path("model_weights.pth")
-    torch.save(model.state_dict(), model_save_path)
-    print(f"Model saved to {model_save_path}")
+    if is_main_process():
+        model_to_save = model.module if hasattr(model, "module") else model
+        torch.save(model_to_save.state_dict(), model_save_path)
+        log(f"Model saved to {model_save_path}")
 
-    # --- Results ---
-    plot_training_history(train_losses, test_losses, args.num_epochs)
+        # --- Results ---
+        eval_model = model.module if is_distributed() and hasattr(model, "module") else model
+        final_eval_result = run_eval_epoch(
+            model=eval_model,
+            dataloader=test_dataloader,
+            criterion=criterion,
+            device=device,
+            norm_statistics=norm_statistics,
+        )
+        export_test_predictions_csv(
+            eval_result=final_eval_result,
+            output_path=pathlib.Path(args.predictions_csv),
+        )
+        plot_training_history(
+            train_losses,
+            test_losses,
+            args.num_epochs,
+            hyperparameters={
+                "BATCH_SIZE": args.batch_size,
+                "NUM_EPOCHS": args.num_epochs,
+                "LEARNING_RATE": args.learning_rate,
+                "DATA_REMOVAL_RATIO": DATA_REMOVAL_RATIO,
+                "DEFAULT_POS_ENCODING_DIM": args.pos_encoding_dim,
+            },
+        )
 
-    print("Script finished.")
+        log("Script finished.")
+
+    if is_distributed():
+        distributed_barrier(device)
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
@@ -864,13 +1143,19 @@ if __name__ == "__main__":
         "--sliding_window_step",
         type=int,
         default=DEFAULT_SLIDING_WINDOW_STEP,
-        help="Step size for sliding window.",
+        help="Step size for sliding window. Lower values create more training windows.",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
         default=DEFAULT_BATCH_SIZE,
-        help="Batch size for training.",
+        help="Batch size for training. With torchrun/DDP this is per GPU process.",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=DEFAULT_NUM_WORKERS,
+        help="Number of DataLoader worker processes. Keep 0 because the dataset is already materialized as tensors.",
     )
     parser.add_argument(
         "--hidden_size",
@@ -891,6 +1176,12 @@ if __name__ == "__main__":
         help="Learning rate for optimizer.",
     )
     parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=DEFAULT_WEIGHT_DECAY,
+        help="Weight decay regularization for Adam.",
+    )
+    parser.add_argument(
         "--data_filename",
         type=str,
         default=DEFAULT_DATA_FILENAME,
@@ -907,6 +1198,12 @@ if __name__ == "__main__":
         type=int,
         default=DEFAULT_PAST_PLOT_VIEW_SIZE,
         help="Number of past steps to show in uniplot.",
+    )
+    parser.add_argument(
+        "--predictions_csv",
+        type=str,
+        default=DEFAULT_PREDICTIONS_CSV,
+        help="CSV file to write test targets, predictions, and per-point loss.",
     )
 
     parser.add_argument(
