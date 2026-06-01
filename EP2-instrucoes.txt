@@ -1,0 +1,20 @@
+Objetivo:
+Implementar e comparar modelos para previsão de séries temporais com dados faltantes,
+combinando codificação temporal no estilo de Vaswani et al. (2017) com o modelo IQN
+descrito em Gouttes et al. (2021), para avaliar o impacto dessas abordagens no desempenho.
+
+O que os alunos devem implementar:
+1. Codificação temporal inspirada em Vaswani et al. (2017), com as features temporais
+codificadas concatenadas à feature de SSH, resultando em T+1 features de entrada.
+2. IQN (Implicit Quantile Networks) conforme Gouttes et al. (2021), integrado ao pipeline
+de previsão para produzir estimativas probabilísticas da série temporal.
+3. Comparação entre o modelo base e o modelo com codificação temporal,
+tanto com dados completos quanto com diferentes níveis de dados faltantes.
+4. Teste de cobertura nos resultados da IQN para avaliar a qualidade dos quantis estimados.
+
+Entregáveis:
+1. Código-fonte atualizado com a implementação solicitada.
+2. Relatório em PDF descrevendo a implementação, os desafios enfrentados e os resultados obtidos (plots).
+
+Priorize boas visualizações!
+Dúvidas devem ser enviadas via fórum no e-Disciplinas.
