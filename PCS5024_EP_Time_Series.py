@@ -25,6 +25,7 @@
 
 import datetime
 import csv
+import json
 import os
 import pathlib
 import torch
@@ -78,6 +79,26 @@ SEED = 100
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
+
+
+def set_global_seed(seed: int) -> None:
+    """Sets all random seeds used by this script."""
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def resolve_output_path(output_dir: str, path_value: str) -> pathlib.Path:
+    """Resolves relative output paths against the configured output directory."""
+
+    output_path = pathlib.Path(path_value)
+    if not output_path.is_absolute():
+        output_path = pathlib.Path(output_dir) / output_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path
 
 
 def setup_distributed() -> tuple[bool, int, int, int]:
@@ -403,21 +424,30 @@ def data_preparation(
         ]
     )
 
-    sample_train = sorted(
-        random.sample(
-            range(train_data_scaled.height),
-            int((1 - DATA_REMOVAL_RATIO) * train_data_scaled.height),
-        )
-    )
-    train_data_scaled = train_data_scaled[sample_train]
+    data_removal_ratio = float(args.data_removal_ratio)
+    if not 0.0 <= data_removal_ratio < 1.0:
+        raise ValueError("--data_removal_ratio must be in the interval [0.0, 1.0).")
 
-    sample_test = sorted(
-        random.sample(
-            range(test_data_scaled.height),
-            int((1 - DATA_REMOVAL_RATIO) * test_data_scaled.height),
+    if data_removal_ratio > 0.0:
+        rng = random.Random(int(args.seed))
+        train_keep_count = max(
+            1, int(round((1.0 - data_removal_ratio) * train_data_scaled.height))
         )
-    )
-    test_data_scaled = test_data_scaled[sample_test]
+        test_keep_count = max(
+            1, int(round((1.0 - data_removal_ratio) * test_data_scaled.height))
+        )
+        sample_train = sorted(rng.sample(range(train_data_scaled.height), train_keep_count))
+        sample_test = sorted(rng.sample(range(test_data_scaled.height), test_keep_count))
+        train_data_scaled = train_data_scaled[sample_train]
+        test_data_scaled = test_data_scaled[sample_test]
+        log(
+            "Applied missing-data simulation: "
+            f"ratio={data_removal_ratio:.2f}, "
+            f"train_kept={train_keep_count}/{train_df.height}, "
+            f"test_kept={test_keep_count}/{test_df.height}"
+        )
+    else:
+        log("Applied missing-data simulation: ratio=0.00, all rows kept.")
 
     train_dataloader, test_dataloader = prepare_dataloaders(
         train_df_features=train_data_scaled,
@@ -480,24 +510,39 @@ def sinusoidal_positional_encoding(
 class ARModel(nn.Module):
     """Autoregressive RNN Model using GRU."""
 
-    def __init__(self, input_size: int, hidden_size: int, pos_encoding_dim: int = DEFAULT_POS_ENCODING_DIM,time_scale: float = DEFAULT_TIME_SCALE,):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        pos_encoding_dim: int = DEFAULT_POS_ENCODING_DIM,
+        time_scale: float = DEFAULT_TIME_SCALE,
+        use_time_encoding: bool = True,
+    ):
         super().__init__()
 
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.pos_encoding_dim = pos_encoding_dim
         self.time_scale = time_scale
+        self.use_time_encoding = use_time_encoding
 
-        # Encoder recebe: SSH + positional encoding do tempo passado
+        encoder_input_size = (
+            input_size + pos_encoding_dim if use_time_encoding else input_size
+        )
+        decoder_input_size = pos_encoding_dim if use_time_encoding else input_size
+
+        # Modelo temporal: encoder recebe [SSH, PE(t)].
+        # Modelo base: encoder recebe apenas SSH.
         self.encoder = nn.GRU(
-            input_size + pos_encoding_dim,
+            encoder_input_size,
             hidden_size,
             batch_first=True,
         )
 
-        # Decoder recebe: positional encoding do tempo futuro
+        # Modelo temporal: decoder recebe PE(t futuro).
+        # Modelo base: decoder recebe zeros, sem informação temporal explícita.
         self.decoder = nn.GRU(
-            pos_encoding_dim,
+            decoder_input_size,
             hidden_size,
             batch_first=True,
         )
@@ -513,23 +558,24 @@ class ARModel(nn.Module):
     def encode(self, x: torch.Tensor, x_timestamps: torch.Tensor, x_lengths: torch.Tensor, origin_timestamp: torch.Tensor) -> torch.Tensor:
         """Encodes the input sequence."""
 
-        x_timestamps = self._timestamps_to_2d(x_timestamps)
+        if self.use_time_encoding:
+            x_timestamps = self._timestamps_to_2d(x_timestamps)
 
-        # Tempos passados relativos à origem da previsão.
-        # Como são tempos passados, ficam negativos.
-        x_relative_positions = (x_timestamps - origin_timestamp) / self.time_scale
+            # Tempos passados relativos à origem da previsão.
+            # Como são tempos passados, ficam negativos.
+            x_relative_positions = (x_timestamps - origin_timestamp) / self.time_scale
 
-        x_pe = sinusoidal_positional_encoding(
-        positions=x_relative_positions,
-        dim=self.pos_encoding_dim,
-        )
+            x_pe = sinusoidal_positional_encoding(
+                positions=x_relative_positions,
+                dim=self.pos_encoding_dim,
+            )
 
-        # Entrada final do encoder:
-        # [SSH, PE(t)]
-        x_augmented = torch.cat([x, x_pe], dim=-1)
+            encoder_inputs = torch.cat([x, x_pe], dim=-1)
+        else:
+            encoder_inputs = x
 
         x_packed = nn.utils.rnn.pack_padded_sequence(
-            x_augmented, x_lengths.cpu(), batch_first=True, enforce_sorted=False
+            encoder_inputs, x_lengths.cpu(), batch_first=True, enforce_sorted=False
         )
         _, h_n = self.encoder(x_packed)  # h_n shape: (1, batch_size, hidden_size)
         return h_n
@@ -540,23 +586,32 @@ class ARModel(nn.Module):
         max_target_length = y_timestamps.size(1)
 
 
-        y_timestamps = self._timestamps_to_2d(
-        y_timestamps[:, :max_target_length]
-        )
+        if self.use_time_encoding:
+            y_timestamps = self._timestamps_to_2d(
+                y_timestamps[:, :max_target_length]
+            )
 
-        # Tempos futuros relativos à origem da previsão.
-        # O +1 faz o primeiro ponto futuro ser +1 em vez de 0.
-        y_relative_positions = (
-            (y_timestamps - origin_timestamp) / self.time_scale
-        ) + 1.0
+            # Tempos futuros relativos à origem da previsão.
+            # O +1 faz o primeiro ponto futuro ser +1 em vez de 0.
+            y_relative_positions = (
+                (y_timestamps - origin_timestamp) / self.time_scale
+            ) + 1.0
 
-        y_pe = sinusoidal_positional_encoding(
-            positions=y_relative_positions,
-            dim=self.pos_encoding_dim,
-        )
+            decoder_inputs = sinusoidal_positional_encoding(
+                positions=y_relative_positions,
+                dim=self.pos_encoding_dim,
+            )
+        else:
+            decoder_inputs = torch.zeros(
+                h_n.size(1),
+                max_target_length,
+                self.input_size,
+                device=h_n.device,
+                dtype=h_n.dtype,
+            )
 
         y_packed = nn.utils.rnn.pack_padded_sequence(
-            y_pe,
+            decoder_inputs,
             y_lengths.cpu(),
             batch_first=True,
             enforce_sorted=False,
@@ -822,11 +877,69 @@ def export_test_predictions_csv(
     print(f"Test predictions CSV saved to {output_path}")
 
 
+def calculate_regression_metrics(eval_result: EvaluationResult) -> dict[str, float]:
+    """Calculates deterministic forecasting metrics on the original SSH scale."""
+
+    y_true = np.concatenate([np.asarray(target)[:, 0] for target in eval_result.targets])
+    y_pred = np.concatenate(
+        [np.asarray(prediction)[:, 0] for prediction in eval_result.predictions]
+    )
+    errors = y_true - y_pred
+    mse = float(np.mean(errors**2))
+    rmse = float(np.sqrt(mse))
+    mae = float(np.mean(np.abs(errors)))
+    bias = float(np.mean(y_pred - y_true))
+    return {
+        "mse": mse,
+        "rmse": rmse,
+        "mae": mae,
+        "bias": bias,
+        "num_points": float(y_true.size),
+        "num_windows": float(len(eval_result.targets)),
+    }
+
+
+def export_training_history_csv(
+    train_losses: list[float],
+    test_losses: list[float],
+    output_path: pathlib.Path,
+) -> None:
+    """Exports train/test loss per epoch."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=["epoch", "train_loss", "test_loss"])
+        writer.writeheader()
+        for epoch, (train_loss, test_loss) in enumerate(
+            zip(train_losses, test_losses), start=1
+        ):
+            writer.writerow(
+                {
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "test_loss": test_loss,
+                }
+            )
+
+    log(f"Training history CSV saved to {output_path}")
+
+
+def export_metrics_json(metrics: dict[str, object], output_path: pathlib.Path) -> None:
+    """Exports final metrics and run metadata as JSON."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w") as json_file:
+        json.dump(metrics, json_file, indent=2, sort_keys=True)
+
+    log(f"Metrics JSON saved to {output_path}")
+
+
 def plot_results(
     train_losses: list[float],
     test_losses: list[float],
     epoch: int,
     hyperparameters: dict[str, object],
+    output_path: pathlib.Path,
 ) -> None:
     """Plots training and testing loss curves."""
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -858,9 +971,10 @@ def plot_results(
     )
 
     fig.tight_layout()
-    fig.savefig("loss_curve.png", dpi=150)
-    plt.show()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
     plt.close()
+    log(f"Loss curve saved to {output_path}")
 
 
 def plot_epoch_results(
@@ -909,10 +1023,11 @@ def plot_training_history(
     test_losses: list[float],
     num_epochs: int,
     hyperparameters: dict[str, object],
+    output_path: pathlib.Path,
 ) -> None:
     """Plots the aggregated training and evaluation losses."""
 
-    plot_results(train_losses, test_losses, num_epochs, hyperparameters)
+    plot_results(train_losses, test_losses, num_epochs, hyperparameters, output_path)
 
 
 def training_loop(
@@ -1005,9 +1120,14 @@ def criterion_without_padding(loss_func:torch.nn.Module) -> Callable[[torch.Tens
 
 def main(args: argparse.Namespace) -> None:
     """Main function to run the training and evaluation."""
+    set_global_seed(int(args.seed))
     distributed, rank, local_rank, world_size = setup_distributed()
     cpu_count = os.cpu_count() or 1
-    threads_per_process = max(1, cpu_count // world_size)
+    threads_per_process = (
+        int(args.torch_threads)
+        if int(args.torch_threads) > 0
+        else max(1, cpu_count // world_size)
+    )
     torch.set_num_threads(threads_per_process)
     torch.set_num_interop_threads(max(1, min(8, threads_per_process)))
 
@@ -1026,6 +1146,8 @@ def main(args: argparse.Namespace) -> None:
         log(f"Using DistributedDataParallel with {world_size} GPUs")
     log(
         "Hyperparameters: "
+        f"model_variant={args.model_variant}, "
+        f"data_removal_ratio={args.data_removal_ratio}, "
         f"batch_size_per_process={args.batch_size}, "
         f"effective_batch_size={args.batch_size * world_size}, "
         f"hidden_size={args.hidden_size}, "
@@ -1054,6 +1176,7 @@ def main(args: argparse.Namespace) -> None:
         hidden_size=args.hidden_size,
         pos_encoding_dim=args.pos_encoding_dim,
         time_scale=args.time_scale,
+        use_time_encoding=args.model_variant == "gru_temporal",
     ).to(device)
     if distributed:
         model = nn.parallel.DistributedDataParallel(
@@ -1086,8 +1209,13 @@ def main(args: argparse.Namespace) -> None:
     )
 
     # --- Save Model ---
-    model_save_path = pathlib.Path("model_weights.pth")
     if is_main_process():
+        model_save_path = resolve_output_path(args.output_dir, args.model_weights_path)
+        predictions_csv_path = resolve_output_path(args.output_dir, args.predictions_csv)
+        history_csv_path = resolve_output_path(args.output_dir, args.history_csv)
+        metrics_json_path = resolve_output_path(args.output_dir, args.metrics_json)
+        loss_curve_path = resolve_output_path(args.output_dir, args.loss_curve_png)
+
         model_to_save = model.module if hasattr(model, "module") else model
         torch.save(model_to_save.state_dict(), model_save_path)
         log(f"Model saved to {model_save_path}")
@@ -1103,19 +1231,49 @@ def main(args: argparse.Namespace) -> None:
         )
         export_test_predictions_csv(
             eval_result=final_eval_result,
-            output_path=pathlib.Path(args.predictions_csv),
+            output_path=predictions_csv_path,
         )
+        export_training_history_csv(
+            train_losses=train_losses,
+            test_losses=test_losses,
+            output_path=history_csv_path,
+        )
+        regression_metrics = calculate_regression_metrics(final_eval_result)
+        metrics = {
+            "run_name": args.run_name,
+            "model_variant": args.model_variant,
+            "data_removal_ratio": float(args.data_removal_ratio),
+            "objective": args.objective,
+            "seed": int(args.seed),
+            "num_epochs": int(args.num_epochs),
+            "batch_size": int(args.batch_size),
+            "hidden_size": int(args.hidden_size),
+            "learning_rate": float(args.learning_rate),
+            "weight_decay": float(args.weight_decay),
+            "past_len": int(args.past_len),
+            "future_len": int(args.future_len),
+            "sliding_window_step": int(args.sliding_window_step),
+            "pos_encoding_dim": int(args.pos_encoding_dim),
+            "time_scale": float(args.time_scale),
+            "final_train_loss": float(train_losses[-1]),
+            "final_test_loss": float(final_eval_result.avg_loss),
+            "best_test_loss": float(min(test_losses)),
+            **regression_metrics,
+        }
+        export_metrics_json(metrics=metrics, output_path=metrics_json_path)
         plot_training_history(
             train_losses,
             test_losses,
             args.num_epochs,
             hyperparameters={
+                "MODEL": args.model_variant,
                 "BATCH_SIZE": args.batch_size,
                 "NUM_EPOCHS": args.num_epochs,
                 "LEARNING_RATE": args.learning_rate,
-                "DATA_REMOVAL_RATIO": DATA_REMOVAL_RATIO,
+                "DATA_REMOVAL_RATIO": args.data_removal_ratio,
                 "DEFAULT_POS_ENCODING_DIM": args.pos_encoding_dim,
             },
+            output_path=loss_curve_path,
         )
 
         log("Script finished.")
@@ -1156,6 +1314,12 @@ if __name__ == "__main__":
         type=int,
         default=DEFAULT_NUM_WORKERS,
         help="Number of DataLoader worker processes. Keep 0 because the dataset is already materialized as tensors.",
+    )
+    parser.add_argument(
+        "--torch_threads",
+        type=int,
+        default=0,
+        help="Number of intra-op/inter-op CPU threads. Use 0 to infer automatically.",
     )
     parser.add_argument(
         "--hidden_size",
@@ -1204,6 +1368,67 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_PREDICTIONS_CSV,
         help="CSV file to write test targets, predictions, and per-point loss.",
+    )
+    parser.add_argument(
+        "--history_csv",
+        type=str,
+        default="training_history.csv",
+        help="CSV file to write training and test losses per epoch.",
+    )
+    parser.add_argument(
+        "--metrics_json",
+        type=str,
+        default="metrics.json",
+        help="JSON file to write final metrics and run metadata.",
+    )
+    parser.add_argument(
+        "--loss_curve_png",
+        type=str,
+        default="loss_curve.png",
+        help="PNG file to write the training and test loss plot.",
+    )
+    parser.add_argument(
+        "--model_weights_path",
+        type=str,
+        default="model_weights.pth",
+        help="Path to write trained model weights.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=".",
+        help="Base directory for relative output paths.",
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default="",
+        help="Human-readable name for this experiment run.",
+    )
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default="",
+        help="Short objective label for this experiment run.",
+    )
+    parser.add_argument(
+        "--model_variant",
+        type=str,
+        choices=["gru_base", "gru_temporal"],
+        default="gru_temporal",
+        help="GRU model variant to train.",
+    )
+    parser.add_argument(
+        "--data_removal_ratio",
+        type=float,
+        default=DATA_REMOVAL_RATIO,
+        help="Fraction of rows to remove from train and test data to simulate missing observations.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=SEED,
+        help="Random seed used for initialization, dataloader shuffling, and missing-data simulation.",
     )
 
     parser.add_argument(

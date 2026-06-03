@@ -1,0 +1,438 @@
+Command:
+/home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/.venv/bin/python /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/PCS5024_EP_Time_Series.py --model_variant gru_temporal --data_removal_ratio 0.1 --run_name cenario_F_GRU_temporal_missing_0p1 --objective robustez --output_dir /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports --predictions_csv cenario_F_GRU_temporal_missing_0p1_predictions.csv --history_csv cenario_F_GRU_temporal_missing_0p1_history.csv --metrics_json cenario_F_GRU_temporal_missing_0p1_metrics.json --loss_curve_png cenario_F_GRU_temporal_missing_0p1_loss_raw.png --model_weights_path cenario_F_GRU_temporal_missing_0p1_model_weights.pth --data_filename data/santos_ssh.csv --split_date 2020-06-01 00:00:00 --past_len 8000 --future_len 2000 --sliding_window_step 25 --batch_size 256 --num_workers 0 --torch_threads 8 --hidden_size 128 --num_epochs 100 --learning_rate 0.0002 --weight_decay 1e-05 --pos_encoding_dim 128 --time_scale 1.0 --seed 100
+
+Using device: cuda
+CPU threads per process: 8
+CUDA devices available: 1
+Hyperparameters: model_variant=gru_temporal, data_removal_ratio=0.1, batch_size_per_process=256, effective_batch_size=256, hidden_size=128, pos_encoding_dim=128, learning_rate=0.0002, weight_decay=1e-05, sliding_window_step=25
+Train set size: 21293
+Test set size: 4320
+Scaling data using Train Mean: shape: (1, 1)
+┌──────────┐
+│ ssh      │
+│ ---      │
+│ f32      │
+╞══════════╡
+│ 0.840088 │
+└──────────┘, Train Std: shape: (1, 1)
+┌──────────┐
+│ ssh      │
+│ ---      │
+│ f32      │
+╞══════════╡
+│ 0.386142 │
+└──────────┘
+Applied missing-data simulation: ratio=0.10, train_kept=19164/21293, test_kept=3888/4320
+Creating sequences and dataloaders...
+x_train shape: torch.Size([8204, 749, 1]), y_train shape: torch.Size([8204, 194, 1])
+x_test shape: torch.Size([1328, 733, 1]), y_test shape: torch.Size([1328, 186, 1])
+
+--- Starting Training ---
+
+Epoch 1/100
+Average Training Loss: 1.0215
+Average Test Loss: 0.7806
+
+Epoch 2/100
+Average Training Loss: 1.0206
+Average Test Loss: 0.7679
+
+Epoch 3/100
+Average Training Loss: 1.0005
+Average Test Loss: 0.7556
+
+Epoch 4/100
+Average Training Loss: 0.9765
+Average Test Loss: 0.7365
+
+Epoch 5/100
+Average Training Loss: 0.9613
+Average Test Loss: 0.7418
+
+Epoch 6/100
+Average Training Loss: 0.9508
+Average Test Loss: 0.7140
+
+Epoch 7/100
+Average Training Loss: 0.9433
+Average Test Loss: 0.7229
+
+Epoch 8/100
+Average Training Loss: 0.9379
+Average Test Loss: 0.7195
+
+Epoch 9/100
+Average Training Loss: 0.9232
+Average Test Loss: 0.7038
+
+Epoch 10/100
+Average Training Loss: 0.9013
+Average Test Loss: 0.6807
+
+Epoch 11/100
+Average Training Loss: 0.8849
+Average Test Loss: 0.6670
+
+Epoch 12/100
+Average Training Loss: 0.7974
+Average Test Loss: 0.5885
+
+Epoch 13/100
+Average Training Loss: 0.5854
+Average Test Loss: 0.4292
+
+Epoch 14/100
+Average Training Loss: 0.5069
+Average Test Loss: 0.4120
+
+Epoch 15/100
+Average Training Loss: 0.4831
+Average Test Loss: 0.4278
+
+Epoch 16/100
+Average Training Loss: 0.4667
+Average Test Loss: 0.3714
+
+Epoch 17/100
+Average Training Loss: 0.4380
+Average Test Loss: 0.3812
+
+Epoch 18/100
+Average Training Loss: 0.4029
+Average Test Loss: 0.3361
+
+Epoch 19/100
+Average Training Loss: 0.3960
+Average Test Loss: 0.3279
+
+Epoch 20/100
+Average Training Loss: 0.3913
+Average Test Loss: 0.3431
+
+Epoch 21/100
+Average Training Loss: 0.3858
+Average Test Loss: 0.3265
+
+Epoch 22/100
+Average Training Loss: 0.3786
+Average Test Loss: 0.3314
+
+Epoch 23/100
+Average Training Loss: 0.3791
+Average Test Loss: 0.3173
+
+Epoch 24/100
+Average Training Loss: 0.3723
+Average Test Loss: 0.3172
+
+Epoch 25/100
+Average Training Loss: 0.3752
+Average Test Loss: 0.3069
+
+Epoch 26/100
+Average Training Loss: 0.3707
+Average Test Loss: 0.3119
+
+Epoch 27/100
+Average Training Loss: 0.3682
+Average Test Loss: 0.3135
+
+Epoch 28/100
+Average Training Loss: 0.3572
+Average Test Loss: 0.3235
+
+Epoch 29/100
+Average Training Loss: 0.3614
+Average Test Loss: 0.3195
+
+Epoch 30/100
+Average Training Loss: 0.3620
+Average Test Loss: 0.3180
+
+Epoch 31/100
+Average Training Loss: 0.3592
+Average Test Loss: 0.3036
+
+Epoch 32/100
+Average Training Loss: 0.3467
+Average Test Loss: 0.3026
+
+Epoch 33/100
+Average Training Loss: 0.3473
+Average Test Loss: 0.2886
+
+Epoch 34/100
+Average Training Loss: 0.3445
+Average Test Loss: 0.3173
+
+Epoch 35/100
+Average Training Loss: 0.3517
+Average Test Loss: 0.3150
+
+Epoch 36/100
+Average Training Loss: 0.3476
+Average Test Loss: 0.2917
+
+Epoch 37/100
+Average Training Loss: 0.3410
+Average Test Loss: 0.3014
+
+Epoch 38/100
+Average Training Loss: 0.3427
+Average Test Loss: 0.2891
+
+Epoch 39/100
+Average Training Loss: 0.3378
+Average Test Loss: 0.3085
+
+Epoch 40/100
+Average Training Loss: 0.3392
+Average Test Loss: 0.2938
+
+Epoch 41/100
+Average Training Loss: 0.3370
+Average Test Loss: 0.2853
+
+Epoch 42/100
+Average Training Loss: 0.3320
+Average Test Loss: 0.2826
+
+Epoch 43/100
+Average Training Loss: 0.3343
+Average Test Loss: 0.2839
+
+Epoch 44/100
+Average Training Loss: 0.3311
+Average Test Loss: 0.2778
+
+Epoch 45/100
+Average Training Loss: 0.3354
+Average Test Loss: 0.2771
+
+Epoch 46/100
+Average Training Loss: 0.3320
+Average Test Loss: 0.2912
+
+Epoch 47/100
+Average Training Loss: 0.3296
+Average Test Loss: 0.2702
+
+Epoch 48/100
+Average Training Loss: 0.3259
+Average Test Loss: 0.2769
+
+Epoch 49/100
+Average Training Loss: 0.3247
+Average Test Loss: 0.2835
+
+Epoch 50/100
+Average Training Loss: 0.3230
+Average Test Loss: 0.3157
+
+Epoch 51/100
+Average Training Loss: 0.3292
+Average Test Loss: 0.2757
+
+Epoch 52/100
+Average Training Loss: 0.3193
+Average Test Loss: 0.2761
+
+Epoch 53/100
+Average Training Loss: 0.3171
+Average Test Loss: 0.2766
+
+Epoch 54/100
+Average Training Loss: 0.3198
+Average Test Loss: 0.2744
+
+Epoch 55/100
+Average Training Loss: 0.3195
+Average Test Loss: 0.2863
+
+Epoch 56/100
+Average Training Loss: 0.3127
+Average Test Loss: 0.2856
+
+Epoch 57/100
+Average Training Loss: 0.3129
+Average Test Loss: 0.2732
+
+Epoch 58/100
+Average Training Loss: 0.3105
+Average Test Loss: 0.2718
+
+Epoch 59/100
+Average Training Loss: 0.3105
+Average Test Loss: 0.2773
+
+Epoch 60/100
+Average Training Loss: 0.3103
+Average Test Loss: 0.2673
+
+Epoch 61/100
+Average Training Loss: 0.3159
+Average Test Loss: 0.3246
+
+Epoch 62/100
+Average Training Loss: 0.3188
+Average Test Loss: 0.2697
+
+Epoch 63/100
+Average Training Loss: 0.3044
+Average Test Loss: 0.2700
+
+Epoch 64/100
+Average Training Loss: 0.3089
+Average Test Loss: 0.2749
+
+Epoch 65/100
+Average Training Loss: 0.3025
+Average Test Loss: 0.2727
+
+Epoch 66/100
+Average Training Loss: 0.2985
+Average Test Loss: 0.2747
+
+Epoch 67/100
+Average Training Loss: 0.3001
+Average Test Loss: 0.2903
+
+Epoch 68/100
+Average Training Loss: 0.2990
+Average Test Loss: 0.2593
+
+Epoch 69/100
+Average Training Loss: 0.2935
+Average Test Loss: 0.2602
+
+Epoch 70/100
+Average Training Loss: 0.2972
+Average Test Loss: 0.2724
+
+Epoch 71/100
+Average Training Loss: 0.2922
+Average Test Loss: 0.2695
+
+Epoch 72/100
+Average Training Loss: 0.2950
+Average Test Loss: 0.2591
+
+Epoch 73/100
+Average Training Loss: 0.2918
+Average Test Loss: 0.2648
+
+Epoch 74/100
+Average Training Loss: 0.2915
+Average Test Loss: 0.2767
+
+Epoch 75/100
+Average Training Loss: 0.2893
+Average Test Loss: 0.2815
+
+Epoch 76/100
+Average Training Loss: 0.2861
+Average Test Loss: 0.2541
+
+Epoch 77/100
+Average Training Loss: 0.2857
+Average Test Loss: 0.2528
+
+Epoch 78/100
+Average Training Loss: 0.2827
+Average Test Loss: 0.2576
+
+Epoch 79/100
+Average Training Loss: 0.2855
+Average Test Loss: 0.2814
+
+Epoch 80/100
+Average Training Loss: 0.2918
+Average Test Loss: 0.2798
+
+Epoch 81/100
+Average Training Loss: 0.2824
+Average Test Loss: 0.2474
+
+Epoch 82/100
+Average Training Loss: 0.2757
+Average Test Loss: 0.2519
+
+Epoch 83/100
+Average Training Loss: 0.2769
+Average Test Loss: 0.2616
+
+Epoch 84/100
+Average Training Loss: 0.2803
+Average Test Loss: 0.2656
+
+Epoch 85/100
+Average Training Loss: 0.2770
+Average Test Loss: 0.2538
+
+Epoch 86/100
+Average Training Loss: 0.2745
+Average Test Loss: 0.2466
+
+Epoch 87/100
+Average Training Loss: 0.2722
+Average Test Loss: 0.2468
+
+Epoch 88/100
+Average Training Loss: 0.2697
+Average Test Loss: 0.2468
+
+Epoch 89/100
+Average Training Loss: 0.2692
+Average Test Loss: 0.2629
+
+Epoch 90/100
+Average Training Loss: 0.2658
+Average Test Loss: 0.2492
+
+Epoch 91/100
+Average Training Loss: 0.2639
+Average Test Loss: 0.2473
+
+Epoch 92/100
+Average Training Loss: 0.2648
+Average Test Loss: 0.2773
+
+Epoch 93/100
+Average Training Loss: 0.2611
+Average Test Loss: 0.2514
+
+Epoch 94/100
+Average Training Loss: 0.2645
+Average Test Loss: 0.2485
+
+Epoch 95/100
+Average Training Loss: 0.2577
+Average Test Loss: 0.2531
+
+Epoch 96/100
+Average Training Loss: 0.2546
+Average Test Loss: 0.2478
+
+Epoch 97/100
+Average Training Loss: 0.2534
+Average Test Loss: 0.2549
+
+Epoch 98/100
+Average Training Loss: 0.2566
+Average Test Loss: 0.2442
+
+Epoch 99/100
+Average Training Loss: 0.2571
+Average Test Loss: 0.2393
+
+Epoch 100/100
+Average Training Loss: 0.2538
+Average Test Loss: 0.2481
+
+--- Training Complete ---
+Model saved to /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports/cenario_F_GRU_temporal_missing_0p1_model_weights.pth
+Test predictions CSV saved to /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports/cenario_F_GRU_temporal_missing_0p1_predictions.csv
+Training history CSV saved to /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports/cenario_F_GRU_temporal_missing_0p1_history.csv
+Metrics JSON saved to /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports/cenario_F_GRU_temporal_missing_0p1_metrics.json
+Loss curve saved to /home/matheuscm/trabalho_PCS5024-_Aprendizado_Estat-stico/reports/cenario_F_GRU_temporal_missing_0p1_loss_raw.png
+Script finished.

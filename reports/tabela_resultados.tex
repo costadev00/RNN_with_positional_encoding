@@ -1,0 +1,14 @@
+\begin{tabular}{lllllrrrr}
+\hline
+Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE \\
+\hline
+A & GRU base & 0.0 & 100 & baseline ideal & 0.3782 & 0.0613 & 0.2476 & 0.2020 \\
+B & GRU base & 0.1 & 100 & robustez & 0.3138 & 0.0510 & 0.2258 & 0.1806 \\
+C & GRU base & 0.3 & 100 & degradacao principal & 0.4428 & 0.0717 & 0.2678 & 0.2103 \\
+D & GRU base & 0.5 & 100 & degradacao severa & 0.5754 & 0.0853 & 0.2921 & 0.2294 \\
+E & GRU temporal & 0.0 & 100 & controle & 0.2336 & 0.0382 & 0.1955 & 0.1560 \\
+F & GRU temporal & 0.1 & 100 & robustez & 0.2481 & 0.0410 & 0.2024 & 0.1617 \\
+G & GRU temporal & 0.3 & 100 & recuperacao principal & 0.2393 & 0.0398 & 0.1994 & 0.1572 \\
+H & GRU temporal & 0.5 & 100 & robustez severa & 0.2637 & 0.0419 & 0.2048 & 0.1646 \\
+\hline
+\end{tabular}
