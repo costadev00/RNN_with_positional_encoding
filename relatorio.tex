@@ -1,0 +1,391 @@
+\documentclass[a4paper,11pt]{article}
+
+% =========================
+% Pacotes básicos
+% =========================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[margin=2.0cm]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{caption}
+
+% =========================
+% Configurações de layout
+% =========================
+\setlength{\parskip}{0.2em}
+\setlength{\parindent}{0pt}
+\setlength{\textfloatsep}{8pt plus 1pt minus 2pt}
+\setlength{\floatsep}{6pt plus 1pt minus 2pt}
+\setlength{\intextsep}{8pt plus 1pt minus 2pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+\setlist[itemize]{noitemsep, topsep=2pt, leftmargin=1.5em}
+
+% =========================
+% Configuração para blocos de código
+% =========================
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\graphicspath{{reports/}{./}}
+
+% =========================
+% Figuras opcionais para Overleaf
+% =========================
+% Se voce colar apenas este .tex no Overleaf, o documento compila com caixas
+% indicando as figuras ausentes. Para ver as figuras reais, envie tambem a pasta
+% reports/ com os arquivos .png gerados.
+\newcommand{\imagemsegura}[2][]{%
+  \IfFileExists{#2}{%
+    \includegraphics[#1]{#2}%
+  }{%
+    \fbox{%
+      \begin{minipage}[c][4cm][c]{0.9\linewidth}
+      \centering\scriptsize
+      Figura nao encontrada no Overleaf.\\
+      Envie o arquivo: \texttt{#2}
+      \end{minipage}%
+    }%
+  }%
+}
+
+% =========================
+% Dados editáveis do trabalho
+% =========================
+\newcommand{\tituloTrabalho}{Previsão de Séries Temporais de SSH com GRU e Codificação Temporal}
+\newcommand{\nomeAutor}{Nome do Aluno}
+\newcommand{\numeroUSP}{NUSP}
+\newcommand{\disciplina}{PCS5024 -- Aprendizado Estatístico}
+\newcommand{\dataEntrega}{\today}
+\newcommand{\linkRepositorio}{}
+
+\begin{document}
+
+% =========================
+% Cabeçalho
+% =========================
+\begin{center}
+\begin{minipage}{0.48\textwidth}
+    \raggedright
+    \IfFileExists{pcs.png}{\includegraphics[height=1.1cm]{pcs.png}}{\fbox{\scriptsize PCS}}
+\end{minipage}
+\begin{minipage}{0.48\textwidth}
+    \raggedleft
+    \IfFileExists{poli.png}{\includegraphics[height=1.6cm]{poli.png}}{\fbox{\scriptsize POLI-USP}}
+\end{minipage}
+
+\vspace{0.4em}
+
+{\large\bfseries \tituloTrabalho\par}
+\vspace{0.2em}
+{\normalsize \nomeAutor{} -- \numeroUSP\par}
+{\small \disciplina\par}
+{\small \dataEntrega\par}
+\end{center}
+
+% =========================
+% Resumo
+% =========================
+\begin{abstract}\small
+Este trabalho avalia modelos recorrentes para previsão da série temporal de nível
+do mar SSH (\textit{sea surface height}) sob diferentes níveis de dados faltantes.
+Foram comparadas duas arquiteturas determinísticas baseadas em GRU: uma versão
+base, sem informação temporal explícita no decodificador, e uma versão com
+codificação temporal sinusoidal inspirada em Vaswani et al. \cite{vaswani2017}.
+Os experimentos foram executados com razões de remoção de dados iguais a
+$0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$, totalizando oito cenários. Os modelos foram
+avaliados por loss de teste normalizada, MSE, RMSE e MAE na escala original da
+série. A codificação temporal reduziu o RMSE em todos os níveis de dados
+faltantes, com ganhos relativos de aproximadamente $23\%$ a $51\%$ em relação
+ao GRU base.
+\end{abstract}
+
+\section{Objetivo e escopo}
+
+O objetivo do experimento foi comparar a robustez de modelos GRU para previsão
+de SSH quando parte das observações da série temporal é removida. A comparação
+foi organizada em oito cenários, quatro para o GRU base e quatro para o GRU com
+codificação temporal. O foco deste relatório é a etapa determinística do
+trabalho: previsão pontual, comparação entre arquiteturas e avaliação sob dados
+faltantes. O enunciado também menciona extensões probabilísticas com IQN
+\cite{gouttes2021}; essa etapa é discutida como continuação natural, mas os
+resultados quantitativos apresentados aqui correspondem aos modelos GRU
+determinísticos executados.
+
+\section{Base de dados e preparação}
+
+A base utilizada foi o arquivo \texttt{data/santos\_ssh.csv}, contendo
+observações de SSH associadas a timestamps. O conjunto foi dividido por data:
+observações anteriores a \texttt{2020-06-01 00:00:00} foram usadas para treino,
+e observações a partir dessa data foram usadas para teste. A normalização foi
+calculada apenas sobre o conjunto de treino e depois aplicada aos conjuntos de
+treino e teste, evitando vazamento de informação.
+
+As amostras de entrada foram criadas por janelas deslizantes. Cada janela utiliza
+um contexto passado de até $8000$ minutos, correspondente a aproximadamente
+$800$ observações quando a série está completa, e prevê um horizonte futuro de
+até $2000$ minutos, aproximadamente $200$ observações. A cada nível de
+\textit{missing}, uma fração das linhas do treino e do teste foi removida de
+forma aleatória e reprodutível antes da formação das janelas. Por isso, nos
+gráficos de previsão o eixo horizontal indica o passo futuro válido da janela, e
+não o número de épocas de treinamento.
+
+\section{Modelos}
+
+\subsection{GRU base}
+
+O modelo base utiliza uma GRU no codificador para resumir a sequência passada de
+SSH. O decodificador também é uma GRU, mas recebe entradas nulas durante a
+previsão, de forma que a informação disponível para gerar o futuro vem
+essencialmente do estado oculto final produzido pelo codificador. Esse modelo
+serve como referência para medir quanto a codificação temporal explícita melhora
+a capacidade de previsão.
+
+\subsection{GRU com codificação temporal}
+
+O modelo temporal adiciona uma codificação sinusoidal dos timestamps relativos
+de cada janela. A codificação segue a ideia das representações posicionais de
+Vaswani et al. \cite{vaswani2017}, com componentes senoidais e cossenoidais em
+diferentes escalas:
+
+\begin{equation}
+    PE(t, 2i) = \sin\left(\frac{t}{10000^{2i/d}}\right),
+    \qquad
+    PE(t, 2i+1) = \cos\left(\frac{t}{10000^{2i/d}}\right).
+\end{equation}
+
+No codificador, essa representação é concatenada à feature SSH, produzindo uma
+entrada do tipo $[SSH, PE(t)]$. No decodificador, a GRU recebe a codificação
+temporal dos instantes futuros, permitindo que o modelo use explicitamente a
+posição relativa de cada passo previsto. Os timestamps são sempre relativos à
+origem da janela de previsão, evitando o uso direto de timestamps absolutos.
+
+\section{Treinamento e métricas}
+
+Todos os cenários foram treinados com os mesmos hiperparâmetros principais:
+\begin{itemize}
+    \item $1000$ épocas;
+    \item GRU com dimensão oculta $128$;
+    \item dimensão da codificação temporal $128$;
+    \item batch size $256$;
+    \item taxa de aprendizado $2 \times 10^{-4}$;
+    \item decaimento de peso $10^{-5}$;
+    \item semente aleatória $100$.
+\end{itemize}
+
+A função objetivo foi o erro quadrático médio calculado apenas sobre posições
+válidas das sequências, ignorando o padding criado pela formação das janelas. As
+métricas finais foram calculadas na escala original da SSH:
+
+\begin{equation}
+    MSE = \frac{1}{N}\sum_{i=1}^{N}(y_i - \hat{y}_i)^2,
+    \qquad
+    RMSE = \sqrt{MSE},
+    \qquad
+    MAE = \frac{1}{N}\sum_{i=1}^{N}|y_i - \hat{y}_i|.
+\end{equation}
+
+\section{Cenários experimentais}
+
+Os oito cenários executados estão resumidos na Tabela~\ref{tab:resultados}. Os
+cenários A--D usam o GRU base, enquanto E--H usam o GRU temporal. As razões de
+dados faltantes foram $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$.
+
+\begin{table}[H]
+\centering
+\caption{Resultados finais dos oito cenários após 1000 épocas. A loss de teste
+é reportada na escala normalizada usada no treinamento; MSE, RMSE e MAE estão na
+escala original da série SSH.}
+\label{tab:resultados}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lllllrrrr}
+\hline
+Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE \\
+\hline
+A & GRU base & 0.0 & 1000 & baseline ideal & 0.4250 & 0.0551 & 0.2347 & 0.1841 \\
+B & GRU base & 0.1 & 1000 & robustez & 0.4878 & 0.0785 & 0.2802 & 0.2195 \\
+C & GRU base & 0.3 & 1000 & degradacao principal & 0.7383 & 0.1198 & 0.3461 & 0.2704 \\
+D & GRU base & 0.5 & 1000 & degradacao severa & 1.1800 & 0.1821 & 0.4267 & 0.3339 \\
+E & GRU temporal & 0.0 & 1000 & controle & 0.2056 & 0.0327 & 0.1808 & 0.1384 \\
+F & GRU temporal & 0.1 & 1000 & robustez & 0.2222 & 0.0358 & 0.1891 & 0.1431 \\
+G & GRU temporal & 0.3 & 1000 & recuperacao principal & 0.2450 & 0.0389 & 0.1972 & 0.1503 \\
+H & GRU temporal & 0.5 & 1000 & robustez severa & 0.2801 & 0.0442 & 0.2103 & 0.1617 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\section{Resultados}
+
+A Figura~\ref{fig:comparativo} mostra a evolução do RMSE e do MAE em função da
+taxa de dados faltantes. O comportamento geral é consistente: o GRU temporal
+mantém erro menor em todos os níveis de \textit{missing}. Em RMSE, as reduções
+relativas em relação ao GRU base foram aproximadamente $23\%$ para
+\textit{missing} $0{,}0$, $33\%$ para $0{,}1$, $43\%$ para $0{,}3$ e $51\%$
+para $0{,}5$.
+
+\begin{figure}[H]
+    \centering
+    \imagemsegura[width=0.92\textwidth]{reports/comparativo_rmse_mae.png}
+    \caption{Comparação agregada de RMSE e MAE por taxa de dados faltantes.}
+    \label{fig:comparativo}
+\end{figure}
+
+O GRU base apresentou degradação forte com o aumento de dados faltantes: o RMSE
+passou de $0{,}2347$ no cenário A para $0{,}4267$ no cenário D, um aumento de
+aproximadamente $82\%$. No GRU temporal, o RMSE foi de $0{,}1808$ no cenário E
+para $0{,}2103$ no cenário H, aumento de aproximadamente $16\%$. Esse resultado
+indica que a informação temporal explícita torna o modelo substancialmente mais
+robusto à irregularidade introduzida pela remoção de observações.
+
+\section{Curvas de treinamento}
+
+As curvas de loss indicam que alguns cenários, especialmente no GRU base,
+apresentaram diferença entre melhor loss de teste e loss final. Isso sugere que
+uma estratégia de \textit{early stopping} poderia melhorar os resultados finais
+do modelo base. Como o protocolo experimental fixou $1000$ épocas para todos os
+cenários, a tabela reporta os modelos ao final do treinamento.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_B_GRU_base_missing_0p1_loss.png}
+    \caption*{Cenário B: GRU base, missing $0{,}1$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_F_GRU_temporal_missing_0p1_loss.png}
+    \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
+\end{minipage}
+
+\vspace{0.5em}
+
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_D_GRU_base_missing_0p5_loss.png}
+    \caption*{Cenário D: GRU base, missing $0{,}5$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_H_GRU_temporal_missing_0p5_loss.png}
+    \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
+\end{minipage}
+\caption{Curvas de loss de treino e teste para cenários representativos.}
+\label{fig:losses}
+\end{figure}
+
+\section{Exemplos de previsão}
+
+A Figura~\ref{fig:forecasts} mostra exemplos de previsão em janelas de teste
+representativas. Os gráficos de previsão usam o eixo horizontal como passo
+futuro da janela escolhida, não como época de treinamento. Como os cenários com
+dados faltantes removem observações antes da criação das janelas, o número de
+pontos válidos pode ser menor que o horizonte nominal completo.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_B_GRU_base_missing_0p1_forecast.png}
+    \caption*{Cenário B: GRU base, missing $0{,}1$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_F_GRU_temporal_missing_0p1_forecast.png}
+    \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
+\end{minipage}
+
+\vspace{0.5em}
+
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_D_GRU_base_missing_0p5_forecast.png}
+    \caption*{Cenário D: GRU base, missing $0{,}5$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports/cenario_H_GRU_temporal_missing_0p5_forecast.png}
+    \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
+\end{minipage}
+\caption{Exemplos de previsão no conjunto de teste.}
+\label{fig:forecasts}
+\end{figure}
+
+\section{Discussão}
+
+Os resultados mostram que a codificação temporal não apenas melhora o erro em
+dados completos, mas também reduz a degradação quando há dados faltantes. A
+principal diferença arquitetural é que o modelo temporal recebe informação sobre
+o instante relativo de cada observação passada e de cada passo futuro. Quando a
+série fica irregular por remoção de linhas, essa informação ajuda a GRU a
+interpretar intervalos temporais que deixam de ser uniformes.
+
+No GRU base, a degradação severa em \textit{missing} $0{,}5$ sugere que o modelo
+passa a depender excessivamente do padrão aprendido nas sequências de treino e
+tem dificuldade em extrapolar quando o conjunto observado fica mais esparso. No
+GRU temporal, a variação de RMSE entre os cenários E e H foi pequena em
+comparação com a variação observada entre A e D, reforçando a hipótese de que a
+codificação temporal melhora a robustez.
+
+Uma limitação importante do protocolo é que todos os cenários usam o modelo da
+época final. Em alguns casos, a melhor loss de teste ocorreu antes da época
+$1000$. Assim, uma etapa posterior poderia reportar também o melhor checkpoint
+por validação, além do modelo final, para separar desempenho máximo e
+desempenho ao fim de treinamento.
+
+\section{Conclusão}
+
+A comparação experimental indica que o GRU com codificação temporal é superior
+ao GRU base nos oito cenários avaliados. O ganho é mais expressivo nos cenários
+com maior proporção de dados faltantes: com \textit{missing} $0{,}5$, o RMSE do
+GRU temporal foi $0{,}2103$, contra $0{,}4267$ do GRU base. Portanto, a
+concatenação de uma representação temporal sinusoidal ao SSH, aliada ao uso de
+informação temporal futura no decodificador, mostrou-se uma estratégia eficaz
+para previsão de SSH em séries irregulares.
+
+Como trabalhos futuros, recomenda-se integrar a abordagem probabilística por
+IQN-RNN proposta por Gouttes et al. \cite{gouttes2021}, permitindo gerar
+quantis, bandas de incerteza e métricas de cobertura. Essa extensão complementa
+a previsão pontual avaliada aqui e atende ao objetivo de estimar não apenas o
+valor esperado da série, mas também a incerteza associada à previsão.
+
+% =========================
+% Referências
+% =========================
+{\footnotesize
+\begin{thebibliography}{99}
+
+\bibitem{vaswani2017}
+VASWANI, A.; SHAZEER, N.; PARMAR, N.; USZKOREIT, J.; JONES, L.; GOMEZ, A. N.;
+KAISER, L.; POLOSUKHIN, I. \textit{Attention Is All You Need}. Advances in
+Neural Information Processing Systems, 2017. Disponível em:
+\url{https://arxiv.org/abs/1706.03762}.
+
+\bibitem{gouttes2021}
+GOUTTES, A.; RASUL, K.; KOREN, M.; STEPHAN, J.; NAGHIBI, T.
+\textit{Probabilistic Time Series Forecasting with Implicit Quantile Networks}.
+Proceedings of the International Conference on Machine Learning, Time Series
+Workshop, 2021. Disponível em: \url{https://arxiv.org/abs/2107.03743}.
+
+\end{thebibliography}
+}
+
+\end{document}
