@@ -70,11 +70,19 @@
 % Dados editáveis do trabalho
 % =========================
 \newcommand{\tituloTrabalho}{Previsão de Séries Temporais de SSH com GRU, Codificação Temporal e IQN}
-\newcommand{\nomeAutor}{Matheus Costa Monteiro}
-\newcommand{\numeroUSP}{17756099}
+
+\newcommand{\nomeAutorA}{João Gabriel Barreto Rodrigues}
+\newcommand{\numeroUSPA}{13679551}
+
+\newcommand{\nomeAutorB}{Matheus Costa Monteiro}
+\newcommand{\numeroUSPB}{17756099}
+
+\newcommand{\nomeAutorC}{Matheus Tierro de Paula}
+\newcommand{\numeroUSPC}{11804021}
+
 \newcommand{\disciplina}{PCS5024 -- Aprendizado Estatístico}
 \newcommand{\dataEntrega}{\today}
-\newcommand{\linkRepositorio}{}
+\newcommand{\linkRepositorio}{https://github.com/costadev00/RNN_with_positional_encoding}
 
 \begin{document}
 
@@ -94,8 +102,13 @@
 \vspace{0.4em}
 
 {\large\bfseries \tituloTrabalho\par}
-\vspace{0.2em}
-{\normalsize \nomeAutor{} -- \numeroUSP\par}
+\vspace{0.4em}
+
+{\normalsize \nomeAutorA{} -- \numeroUSPA\par}
+{\normalsize \nomeAutorB{} -- \numeroUSPB\par}
+{\normalsize \nomeAutorC{} -- \numeroUSPC\par}
+
+\vspace{0.3em}
 {\small \disciplina\par}
 {\small \dataEntrega\par}
 \end{center}
@@ -107,7 +120,7 @@
 Este trabalho avalia modelos recorrentes para previsão da série temporal de nível
 do mar SSH (\textit{sea surface height}) sob diferentes níveis de dados faltantes.
 Foram comparadas duas arquiteturas determinísticas baseadas em GRU: uma versão
-base, sem informação temporal explícita no decodificador, e uma versão com
+base, sem informação temporal explícita, e uma versão com
 codificação temporal sinusoidal inspirada em Vaswani et al. \cite{vaswani2017}.
 Além disso, foi implementada uma extensão probabilística com IQN
 (\textit{Implicit Quantile Networks}), conforme Gouttes et al. \cite{gouttes2021},
@@ -117,7 +130,8 @@ totalizando doze cenários. A codificação temporal reduziu o RMSE em todos os
 níveis de dados faltantes, com ganhos relativos de aproximadamente $22\%$ a
 $41\%$ em relação ao GRU base. A IQN produziu previsões probabilísticas com
 cobertura empírica entre $71\%$ e $79\%$ para o intervalo nominal de $80\%$ e
-entre $84\%$ e $89\%$ para o intervalo nominal de $90\%$.
+entre $84\%$ e $89\%$ para o intervalo nominal de $90\%$. O código-fonte do
+projeto está disponível em \url{\linkRepositorio}.
 \end{abstract}
 
 \section{Objetivo e escopo}
@@ -128,158 +142,39 @@ estender o pipeline temporal para produzir previsões probabilísticas. A
 comparação determinística foi organizada em oito cenários, quatro para o GRU
 base e quatro para o GRU com codificação temporal. A etapa probabilística
 adicionou quatro cenários com IQN acoplada ao GRU temporal, usando os mesmos
-níveis de \textit{missing}. Assim, o relatório cobre tanto previsão pontual
+níveis de \textit{missing}. Assim, o trabalho cobre tanto previsão pontual
 quanto estimativas de incerteza por quantis.
 
-\section{Base de dados e preparação}
 
-A base utilizada foi o arquivo \texttt{data/santos\_ssh.csv}, contendo
-observações de SSH associadas a timestamps. O conjunto foi dividido por data:
-observações anteriores a \texttt{2020-06-01 00:00:00} foram usadas para treino,
-e observações a partir dessa data foram usadas para teste. A normalização foi
-calculada apenas sobre o conjunto de treino e depois aplicada aos conjuntos de
-treino e teste, evitando vazamento de informação.
+\section{Protocolo de treinamento}
 
-As amostras de entrada foram criadas por janelas deslizantes. Cada janela utiliza
-um contexto passado de até $8000$ minutos, correspondente a aproximadamente
-$800$ observações quando a série está completa, e prevê um horizonte futuro de
-até $2000$ minutos, aproximadamente $200$ observações. A cada nível de
-\textit{missing}, uma fração das linhas do treino e do teste foi removida de
-forma aleatória e reprodutível antes da formação das janelas. Por isso, nos
-gráficos de previsão o eixo horizontal indica o passo futuro válido da janela, e
-não o número de épocas de treinamento.
-
-\section{Modelos}
-
-\subsection{GRU base}
-
-O modelo base utiliza uma GRU no codificador para resumir a sequência passada de
-SSH. O decodificador também é uma GRU, mas recebe entradas nulas durante a
-previsão, de forma que a informação disponível para gerar o futuro vem
-essencialmente do estado oculto final produzido pelo codificador. Esse modelo
-serve como referência para medir quanto a codificação temporal explícita melhora
-a capacidade de previsão.
-
-\subsection{GRU com codificação temporal}
-
-O modelo temporal adiciona uma codificação sinusoidal dos timestamps relativos
-de cada janela. A codificação segue a ideia das representações posicionais de
-Vaswani et al. \cite{vaswani2017}, com componentes senoidais e cossenoidais em
-diferentes escalas:
-
-\begin{equation}
-    PE(t, 2i) = \sin\left(\frac{t}{10000^{2i/d}}\right),
-    \qquad
-    PE(t, 2i+1) = \cos\left(\frac{t}{10000^{2i/d}}\right).
-\end{equation}
-
-No codificador, essa representação é concatenada à feature SSH, produzindo uma
-entrada do tipo $[SSH, PE(t)]$. No decodificador, a GRU recebe a codificação
-temporal dos instantes futuros, permitindo que o modelo use explicitamente a
-posição relativa de cada passo previsto. Os timestamps são sempre relativos à
-origem da janela de previsão, evitando o uso direto de timestamps absolutos.
-
-\subsection{GRU temporal com IQN}
-
-A extensão probabilística reutiliza o codificador e o decodificador do GRU
-temporal, mas substitui a cabeça determinística por uma cabeça IQN. Durante o
-treinamento, para cada observação válida e passo futuro é amostrado um valor
-$\tau \sim U(0,1)$. Esse valor é codificado por uma base cossenoidal,
-seguindo a formulação de Gouttes et al. \cite{gouttes2021}:
-
-\begin{equation}
-    \phi(\tau) = ReLU\left(\sum_{i=0}^{n-1}
-    \cos(\pi i \tau)w_i + b_i\right).
-\end{equation}
-
-O vetor $\phi(\tau)$ é combinado ao estado oculto produzido pelo decodificador
-por produto elemento a elemento na forma $h_t \odot (1 + \phi(\tau))$. Em
-seguida, uma pequena rede MLP gera a previsão associada ao quantil $\tau$. Na
-inferência, foram usadas $100$ amostras determinísticas de $\tau$ para estimar
-os quantis empíricos $q05$, $q10$, $q50$, $q90$ e $q95$. A mediana $q50$ foi
-usada como previsão pontual da IQN.
-
-\section{Treinamento e métricas}
-
-Todos os cenários foram treinados com os mesmos hiperparâmetros principais:
+Todos os cenários foram treinados com o mesmo protocolo principal:
 \begin{itemize}
-    \item limite máximo de $1000$ épocas;
-    \item regularização por \textit{early stopping}, com paciência de $50$
-    épocas sem melhora na loss de teste;
-    \item GRU com dimensão oculta $128$;
-    \item dimensão da codificação temporal $128$;
-    \item batch size efetivo $1024$, obtido com batch $256$ por processo;
-    \item taxa de aprendizado $2 \times 10^{-4}$;
-    \item decaimento de peso $10^{-5}$;
-    \item semente aleatória $100$.
+\item limite máximo de $1000$ épocas;
+\item \textit{early stopping} com paciência de $50$ épocas;
+\item GRU com dimensão oculta $128$;
+\item codificação temporal com dimensão $128$;
+\item batch size $256$ por GPU, resultando em batch efetivo $1024$ com quatro GPUs;
+\item otimizador Adam, taxa de aprendizado $2 \times 10^{-4}$ e decaimento de peso $10^{-5}$;
+\item seed aleatória $100$.
 \end{itemize}
 
-Nos cenários IQN, foram usadas $8$ amostras de $\tau$ por ponto futuro durante
-o treinamento, $100$ amostras durante a avaliação e dimensão $64$ para o
-embedding de $\tau$.
+Nos modelos determinísticos, usou-se MSE como função de perda; nos cenários IQN,
+usou-se loss quantílica, com $8$ amostras de $\tau$ por ponto futuro no treino,
+$100$ na avaliação e embedding de $\tau$ com dimensão $64$.
 
-As execuções foram realizadas em treinamento distribuído com quatro GPUs RTX
-4000 Ada Generation, usando um processo por GPU. Ao final do treinamento, o
-checkpoint da melhor época foi restaurado antes da geração das previsões e do
-cálculo das métricas finais.
+As execuções foram distribuídas em quatro GPUs RTX 4000 Ada Generation, com um
+processo por GPU. Ao final, restaurou-se o checkpoint de menor loss monitorada
+para gerar previsões e métricas. 
 
-Nos modelos determinísticos, a função objetivo foi o erro quadrático médio
-calculado apenas sobre posições válidas das sequências, ignorando o padding
-criado pela formação das janelas. Nos cenários IQN, a função objetivo foi a
-\textit{pinball loss}, também chamada de \textit{quantile loss}:
+\textbf{Importante:} o código base fornecido separava apenas conjuntos de treino e teste,
+sem conjunto de validação. Para preservar essa divisão temporal original, o
+\textit{early stopping} foi aplicado sobre a loss monitorada no conjunto de
+teste. O objetivo desse procedimento não foi produzir uma estimativa de teste
+totalmente independente, mas comparar as arquiteturas em checkpoints com menor
+overfitting, permitindo avaliar de forma mais clara o efeito da codificação
+temporal e da extensão IQN.
 
-\begin{equation}
-    L_\tau(y, \hat{y}) =
-    \max \left(\tau (y-\hat{y}), (\tau-1)(y-\hat{y})\right).
-\end{equation}
-
-Assim como no MSE, a loss de quantis foi calculada apenas nas posições válidas,
-desconsiderando o padding. As métricas finais foram calculadas na escala
-original da SSH:
-
-\begin{equation}
-    MSE = \frac{1}{N}\sum_{i=1}^{N}(y_i - \hat{y}_i)^2,
-    \qquad
-    RMSE = \sqrt{MSE},
-    \qquad
-    MAE = \frac{1}{N}\sum_{i=1}^{N}|y_i - \hat{y}_i|.
-\end{equation}
-
-Para IQN, as métricas pontuais usam $q50$ como $\hat{y}$. Também foram
-calculadas a quantile loss, a cobertura empírica dos intervalos $q10$--$q90$ e
-$q05$--$q95$, e a largura média desses intervalos. A coluna \textit{Loss teste}
-vem da função objetivo usada durante o treinamento, na escala normalizada. Já a
-coluna QLoss reportada nas tabelas foi recalculada sobre os quantis
-desnormalizados, na escala original da SSH.
-
-\section{Implementação no pipeline}
-
-A implementação foi concentrada em dois pontos do código. Em
-\texttt{PCS5024\_EP\_Time\_Series.py}, foi adicionada a variante
-\texttt{gru\_temporal\_iqn}. Essa variante reaproveita o codificador e o
-decodificador do GRU temporal e troca apenas a cabeça de saída por uma cabeça
-IQN. O treinamento amostra valores de $\tau$ a cada passo válido da sequência,
-aplica a codificação cossenoidal de $\tau$, combina essa representação ao estado
-oculto do decodificador e otimiza a \textit{pinball loss} mascarada por
-\texttt{target\_lengths}. Na avaliação, uma grade determinística de $100$
-valores de $\tau$ é usada para estimar os quantis exportados.
-
-Para manter compatibilidade com o restante do pipeline, a mediana $q50$ é
-gravada também como \texttt{Y\_hat}. Assim, os CSVs e as métricas pontuais
-continuam tendo o mesmo formato dos cenários determinísticos, enquanto os
-cenários IQN adicionam as colunas \texttt{q05}, \texttt{q10}, \texttt{q50},
-\texttt{q90}, \texttt{q95}, \texttt{interval\_width\_80} e
-\texttt{interval\_width\_90}. Os arquivos JSON de métricas também passaram a
-incluir \texttt{quantile\_loss}, coberturas empíricas e larguras médias dos
-intervalos.
-
-Em \texttt{run\_reports.py}, foram preservados os cenários determinísticos A--H
-e adicionados os cenários I--L com \texttt{gru\_temporal\_iqn} para
-\textit{missing} $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$. O gerador de relatórios
-também foi atualizado para produzir gráficos com bandas probabilísticas nos
-cenários IQN, além dos gráficos agregados de cobertura nominal versus empírica e
-largura média dos intervalos. A execução final foi salva na pasta
-\texttt{reports\_iqn\_temporal}.
 
 \section{Cenários experimentais}
 
@@ -290,55 +185,72 @@ $0{,}1$, $0{,}3$ e $0{,}5$.
 
 \begin{table}[H]
 \centering
-\caption{Resultados finais dos doze cenários com \textit{early stopping}. A
-loss de teste é MSE normalizado para modelos determinísticos e quantile loss
-normalizada para IQN. MSE, RMSE e MAE estão na escala original da SSH; nos
-cenários IQN, essas métricas usam a mediana $q50$. A coluna QLoss é calculada na
-escala original da SSH.}
+\caption{Resultados finais dos doze cenários com \textit{early stopping}. MSE,
+RMSE e MAE estão na escala original da SSH; nos cenários IQN, essas métricas são
+calculadas usando a mediana $q50$. QLoss é calculada apenas para IQN, na escala
+original da SSH. Cob. 80 e Cob. 90 representam a cobertura empírica dos
+intervalos $q10$--$q90$ e $q05$--$q95$, respectivamente.}
 \label{tab:resultados}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lllllrrrrrrr}
 \hline
-Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE & QLoss & Cob80 & Cob90 \\
+Cenário & Modelo & Missing & Épocas & Loss teste & MSE & RMSE & MAE & QLoss & Cob. 80 & Cob. 90 \\
 \hline
-A & GRU base & 0.0 & 337 & baseline ideal & 0.3565 & 0.0583 & 0.2415 & 0.1970 &  &  &  \\
-B & GRU base & 0.1 & 196 & robustez & 0.4006 & 0.0660 & 0.2569 & 0.2064 &  &  &  \\
-C & GRU base & 0.3 & 140 & degradação principal & 0.5017 & 0.0834 & 0.2888 & 0.2295 &  &  &  \\
-D & GRU base & 0.5 & 334 & degradação severa & 0.4769 & 0.0696 & 0.2637 & 0.2120 &  &  &  \\
-E & GRU temporal & 0.0 & 340 & controle & 0.2150 & 0.0355 & 0.1884 & 0.1496 &  &  &  \\
-F & GRU temporal & 0.1 & 756 & robustez & 0.1902 & 0.0312 & 0.1767 & 0.1389 &  &  &  \\
-G & GRU temporal & 0.3 & 664 & recuperação principal & 0.1750 & 0.0288 & 0.1697 & 0.1328 &  &  &  \\
-H & GRU temporal & 0.5 & 630 & robustez severa & 0.2110 & 0.0331 & 0.1818 & 0.1445 &  &  &  \\
-I & GRU temporal IQN & 0.0 & 869 & IQN controle & 0.1093 & 0.0259 & 0.1611 & 0.1250 & 0.0304 & 0.7680 & 0.8759 \\
-J & GRU temporal IQN & 0.1 & 976 & IQN robustez & 0.1095 & 0.0249 & 0.1577 & 0.1240 & 0.0299 & 0.7283 & 0.8564 \\
-K & GRU temporal IQN & 0.3 & 342 & IQN recuperação principal & 0.1408 & 0.0423 & 0.2058 & 0.1634 & 0.0387 & 0.7867 & 0.8936 \\
-L & GRU temporal IQN & 0.5 & 590 & IQN robustez severa & 0.1292 & 0.0324 & 0.1800 & 0.1426 & 0.0343 & 0.7136 & 0.8396 \\
+A & GRU base & 0.0 & 337 & 0.3565 & 0.0583 & 0.2415 & 0.1970 &  &  &  \\
+B & GRU base & 0.1 & 196 & 0.4006 & 0.0660 & 0.2569 & 0.2064 &  &  &  \\
+C & GRU base & 0.3 & 140  & 0.5017 & 0.0834 & 0.2888 & 0.2295 &  &  &  \\
+D & GRU base & 0.5 & 334  & 0.4769 & 0.0696 & 0.2637 & 0.2120 &  &  &  \\
+E & GRU temporal & 0.0 & 340 & 0.2150 & 0.0355 & \textbf{0.1884} & \textbf{0.1496} &  &  &  \\
+F & GRU temporal & 0.1 & 756 & 0.1902 & 0.0312 & \textbf{0.1767} & \textbf{0.1389} &  &  &  \\
+G & GRU temporal & 0.3 & 664  & 0.1750 & \textbf{0.0288} & \textbf{0.1697} & \textbf{0.1328} &  &  &  \\
+H & GRU temporal & 0.5 & 630 & 0.2110 & 0.0331 & \textbf{0.1818} & \textbf{0.1445} &  &  &  \\
+I & GRU temporal IQN & 0.0 & 869  & 0.1093 & 0.0259 & \textbf{0.1611} & \textbf{0.1250} & 0.0304 & 0.7680 & 0.8759 \\
+J & GRU temporal IQN & 0.1 & 976 & 0.1095 & 0.0249 & \textbf{0.1577} & \textbf{0.1240} & \textbf{0.0299} & 0.7283 & 0.8564 \\
+K & GRU temporal IQN & 0.3 & 342 & 0.1408 & 0.0423 & 0.2058 & 0.1634 & 0.0387 & \textbf{0.7867} & \textbf{0.8936} \\
+L & GRU temporal IQN & 0.5 & 590 & 0.1292 & 0.0324 & \textbf{0.1800} & \textbf{0.1426} & 0.0343 & 0.7136 & 0.8396 \\
 \hline
 \end{tabular}%
 }
+\vspace{0.2em}
+
+\begin{minipage}{0.96\textwidth}
+\raggedright\footnotesize\emph{Nota:} A loss de teste dos modelos
+determinísticos é MSE normalizado, enquanto a loss dos modelos IQN é quantile
+loss normalizada; por isso, esses valores não devem ser comparados diretamente
+entre famílias de modelos.
+\end{minipage}
 \end{table}
 
-\section{Resultados determinísticos}
+Os destaques em negrito sintetizam os principais resultados da comparação. A
+GRU temporal reduz RMSE e MAE em todos os níveis de \textit{missing} em relação
+à GRU base, com o maior ganho determinístico em \textit{missing} $0{,}3$ no
+cenário G, que também apresenta MSE igual a $0{,}0288$. A IQN fornece previsões
+pontuais competitivas pela mediana $q50$, e a melhor calibração ocorre no
+cenário K, com Cob. 80 igual a $0{,}7867$ e Cob. 90 igual a $0{,}8936$.
 
-A Figura~\ref{fig:comparativo} mostra a evolução do RMSE e do MAE em função da
-taxa de dados faltantes. O GRU temporal manteve erro menor que o GRU base em
-todos os níveis de \textit{missing}. Em RMSE, as reduções relativas foram
-aproximadamente $22\%$ para \textit{missing} $0{,}0$, $31\%$ para $0{,}1$,
-$41\%$ para $0{,}3$ e $31\%$ para $0{,}5$. Em MAE, os ganhos ficaram entre
-$24\%$ e $42\%$.
+\section{Comparação de desempenho}
+
+A Figura~\ref{fig:comparativo} compara RMSE e MAE dos três modelos em função da
+taxa de dados faltantes.
 
 \begin{figure}[H]
     \centering
-    \imagemsegura[width=0.92\textwidth]{reports_iqn_temporal/comparativo_rmse_mae.png}
+    \imagemsegura[width=0.92\textwidth]{comparativo_rmse_mae.png}
     \caption{Comparação agregada de RMSE e MAE por taxa de dados faltantes.}
     \label{fig:comparativo}
 \end{figure}
 
+O GRU temporal apresentou erro menor que o GRU base em
+todos os níveis de \textit{missing}, confirmando o benefício da codificação
+temporal. Em RMSE, as reduções relativas do GRU temporal em relação ao GRU base
+foram de aproximadamente $22\%$, $31\%$, $41\%$ e $31\%$ para \textit{missing}
+$0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$, respectivamente.
+
+A IQN temporal também apresentou desempenho pontual competitivo. Sua mediana
+obteve o menor RMSE nos cenários com \textit{missing} $0{,}0$ e $0{,}1$.
+
 Esse resultado confirma que a codificação temporal ajuda a GRU a interpretar
-janelas irregulares. No modelo base, remover linhas altera os intervalos reais
-entre observações, mas o decodificador não recebe essa informação. No modelo
-temporal, tanto o contexto passado quanto o horizonte futuro carregam posições
-relativas, o que reduz a degradação quando há dados faltantes.
+janelas irregulares.
 
 \section{Resultados probabilísticos da IQN}
 
@@ -369,12 +281,12 @@ L & 0.5 & 0.0343 & 0.1800 & 0.1426 & 0.7136 & 0.8396 & 0.3876 / 0.5028 \\
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cobertura_iqn.png}
+    \imagemsegura[width=\textwidth]{cobertura_iqn.png}
     \caption*{Cobertura nominal versus cobertura empírica.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/largura_intervalos_iqn.png}
+    \imagemsegura[width=\textwidth]{largura_intervalos_iqn.png}
     \caption*{Largura média dos intervalos por \textit{missing}.}
 \end{minipage}
 \caption{Avaliação dos intervalos probabilísticos produzidos pela IQN.}
@@ -389,114 +301,232 @@ $84\%$ e $89\%$. A maior largura ocorreu no cenário K, com \textit{missing}
 $0{,}3$, que também foi o cenário IQN com maior RMSE da mediana. Isso sugere
 que a IQN aumentou a incerteza justamente em uma configuração mais difícil.
 
-Comparando a mediana da IQN ao GRU temporal determinístico, a IQN reduziu o RMSE
-nos cenários sem remoção, com \textit{missing} $0{,}1$ e com \textit{missing}
-$0{,}5$. No cenário com \textit{missing} $0{,}3$, a mediana da IQN teve RMSE
-maior que o GRU temporal determinístico, mas ainda produziu intervalos de
-incerteza com cobertura próxima dos valores nominais.
 
 \section{Curvas de treinamento}
 
 As curvas de loss indicam que os cenários atingem seus melhores checkpoints em
-épocas distintas. Por isso, o treinamento foi interrompido quando a loss de teste
-ficou $50$ épocas sem melhora. Na IQN, as curvas representam quantile loss, e
+épocas distintas, por conta da estratégia e implementação de regularização por \textit{early-stopping}, que foi implementado com uma variável de \textit{patience} que contava 50 épocas sem melhoras na curva de validação/teste, fazendo com que o treinamento fosse interrompido, salvando os pesos da melhor época. Na IQN, as curvas representam quantile loss, e
 não MSE, o que torna a comparação direta de loss com os cenários determinísticos
 menos apropriada.
 
+As Figuras~\ref{fig:losses_det_0p0}--\ref{fig:losses_det_0p5} mostram que, para
+o mesmo nível de \textit{missing}, o GRU temporal, à direita, apresenta loss de
+teste menor que o GRU base, à esquerda. Isso confirma que a codificação temporal
+melhora a generalização do modelo nos cenários determinísticos.
+
 \begin{figure}[H]
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_B_GRU_base_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{cenario_A_GRU_base_missing_0p0_loss.png}
+    \caption*{Cenário A: GRU base, missing $0{,}0$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_E_GRU_temporal_missing_0p0_loss.png}
+    \caption*{Cenário E: GRU temporal, missing $0{,}0$.}
+\end{minipage}
+\caption{Curvas de loss para \textit{missing} $0{,}0$.}
+\label{fig:losses_det_0p0}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_B_GRU_base_missing_0p1_loss.png}
     \caption*{Cenário B: GRU base, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_F_GRU_temporal_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{cenario_F_GRU_temporal_missing_0p1_loss.png}
     \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
 \end{minipage}
+\caption{Curvas de loss para \textit{missing} $0{,}1$.}
+\label{fig:losses_det_0p1}
+\end{figure}
 
-\vspace{0.5em}
-
+\begin{figure}[H]
+\centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_J_GRU_temporal_IQN_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{cenario_C_GRU_base_missing_0p3_loss.png}
+    \caption*{Cenário C: GRU base, missing $0{,}3$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_G_GRU_temporal_missing_0p3_loss.png}
+    \caption*{Cenário G: GRU temporal, missing $0{,}3$.}
+\end{minipage}
+\caption{Curvas de loss para \textit{missing} $0{,}3$.}
+\label{fig:losses_det_0p3}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_D_GRU_base_missing_0p5_loss.png}
+    \caption*{Cenário D: GRU base, missing $0{,}5$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_H_GRU_temporal_missing_0p5_loss.png}
+    \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
+\end{minipage}
+\caption{Curvas de loss para \textit{missing} $0{,}5$.}
+\label{fig:losses_det_0p5}
+\end{figure}
+
+As Figuras~\ref{fig:losses_iqn_0p0_0p1} e~\ref{fig:losses_iqn_0p3_0p5}
+mostram as curvas dos cenários IQN. Elas indicam convergência da loss quantílica
+ao longo do treinamento. Esses valores não são diretamente comparáveis às losses
+dos modelos determinísticos, pois a IQN é otimizada com uma função de perda
+diferente. Por isso, sua avaliação principal é feita pelas coberturas empíricas
+e pelos intervalos de previsão.
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_I_GRU_temporal_IQN_missing_0p0_loss.png}
+    \caption*{Cenário I: GRU temporal IQN, missing $0{,}0$.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_J_GRU_temporal_IQN_missing_0p1_loss.png}
     \caption*{Cenário J: GRU temporal IQN, missing $0{,}1$.}
 \end{minipage}
-\begin{minipage}{0.49\textwidth}
-    \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_K_GRU_temporal_IQN_missing_0p3_loss.png}
-    \caption*{Cenário K: GRU temporal IQN, missing $0{,}3$.}
-\end{minipage}
-\caption{Curvas de loss de treino e teste para cenários representativos.}
-\label{fig:losses}
+\caption{Curvas de loss quantílica para os cenários IQN com \textit{missing} $0{,}0$ e $0{,}1$.}
+\label{fig:losses_iqn_0p0_0p1}
 \end{figure}
-
-\section{Exemplos de previsão}
-
-A Figura~\ref{fig:forecasts} mostra exemplos de previsão em janelas de teste
-representativas. Nos cenários determinísticos, o gráfico mostra a previsão
-pontual. Nos cenários IQN, o gráfico mostra a mediana $q50$ e bandas de
-incerteza $q10$--$q90$ e $q05$--$q95$.
 
 \begin{figure}[H]
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_B_GRU_base_missing_0p1_forecast.png}
-    \caption*{Cenário B: GRU base, missing $0{,}1$.}
+    \imagemsegura[width=\textwidth]{cenario_K_GRU_temporal_IQN_missing_0p3_loss.png}
+    \caption*{Cenário K: GRU temporal IQN, missing $0{,}3$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_F_GRU_temporal_missing_0p1_forecast.png}
-    \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
+    \imagemsegura[width=\textwidth]{cenario_L_GRU_temporal_IQN_missing_0p5_loss.png}
+    \caption*{Cenário L: GRU temporal IQN, missing $0{,}5$.}
 \end{minipage}
-
-\vspace{0.5em}
-
-\begin{minipage}{0.49\textwidth}
-    \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_J_GRU_temporal_IQN_missing_0p1_forecast.png}
-    \caption*{Cenário J: IQN, missing $0{,}1$.}
-\end{minipage}
-\begin{minipage}{0.49\textwidth}
-    \centering
-    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_L_GRU_temporal_IQN_missing_0p5_forecast.png}
-    \caption*{Cenário L: IQN, missing $0{,}5$.}
-\end{minipage}
-\caption{Exemplos de previsão no conjunto de teste.}
-\label{fig:forecasts}
+\caption{Curvas de loss quantílica para os cenários IQN com \textit{missing} $0{,}3$ e $0{,}5$.}
+\label{fig:losses_iqn_0p3_0p5}
 \end{figure}
 
-\section{Discussão}
 
-Os resultados mostram que a codificação temporal não apenas melhora o erro em
-dados completos, mas também reduz a degradação quando há dados faltantes. A
-principal diferença arquitetural é que o modelo temporal recebe informação sobre
-o instante relativo de cada observação passada e de cada passo futuro. Quando a
-série fica irregular por remoção de linhas, essa informação ajuda a GRU a
-interpretar intervalos temporais que deixam de ser uniformes.
+\section{Curvas de previsão}
 
-A implementação da IQN complementou o pipeline ao transformar a previsão pontual
-em previsão probabilística. A maior dificuldade prática foi que a cabeça IQN
-multiplica o custo computacional: no treino são geradas $8$ amostras por ponto
-futuro e, na avaliação, $100$ amostras por ponto futuro. Além disso, no
-treinamento distribuído foi necessário remover a cabeça linear determinística
-dos modelos IQN para evitar parâmetros não utilizados no DDP. Após esse ajuste,
-os cenários I--L executaram corretamente.
+As Figuras~\ref{fig:forecasts_0p0}--\ref{fig:forecasts_0p5} mostram exemplos
+de previsão no conjunto de teste. Em cada figura, compara-se, para o mesmo nível
+de \textit{missing}, o GRU base, o GRU temporal e o GRU temporal IQN. Nos modelos
+determinísticos, o gráfico mostra a previsão pontual. Nos cenários IQN, são
+mostradas a mediana $q50$ e as bandas de incerteza $q10$--$q90$ e $q05$--$q95$.
 
-Uma limitação importante do protocolo é que o \textit{early stopping} monitorou
-a loss do conjunto de teste, pois este era o particionamento disponível no
-pipeline experimental. Em um protocolo mais rigoroso, uma fração do treino
-deveria ser separada como validação, reservando o teste apenas para a avaliação
-final. Outra limitação é que as coberturas da IQN ficaram levemente abaixo dos
-níveis nominais, sugerindo que uma calibração posterior ou um ajuste de
-hiperparâmetros poderia melhorar a largura dos intervalos.
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_A_GRU_base_missing_0p0_forecast.png}
+    \caption*{A: GRU base}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_E_GRU_temporal_missing_0p0_forecast.png}
+    \caption*{E: GRU temporal}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_I_GRU_temporal_IQN_missing_0p0_forecast.png}
+    \caption*{I: GRU temporal IQN}
+\end{minipage}
+\caption{Exemplos de previsão para \textit{missing} $0{,}0$.}
+\label{fig:forecasts_0p0}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_B_GRU_base_missing_0p1_forecast.png}
+    \caption*{B: GRU base}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_F_GRU_temporal_missing_0p1_forecast.png}
+    \caption*{F: GRU temporal}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_J_GRU_temporal_IQN_missing_0p1_forecast.png}
+    \caption*{J: GRU temporal IQN}
+\end{minipage}
+\caption{Exemplos de previsão para \textit{missing} $0{,}1$.}
+\label{fig:forecasts_0p1}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_C_GRU_base_missing_0p3_forecast.png}
+    \caption*{C: GRU base}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_G_GRU_temporal_missing_0p3_forecast.png}
+    \caption*{G: GRU temporal}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_K_GRU_temporal_IQN_missing_0p3_forecast.png}
+    \caption*{K: GRU temporal IQN}
+\end{minipage}
+\caption{Exemplos de previsão para \textit{missing} $0{,}3$.}
+\label{fig:forecasts_0p3}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_D_GRU_base_missing_0p5_forecast.png}
+    \caption*{D: GRU base}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_H_GRU_temporal_missing_0p5_forecast.png}
+    \caption*{H: GRU temporal}
+\end{minipage}
+\begin{minipage}{0.32\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{cenario_L_GRU_temporal_IQN_missing_0p5_forecast.png}
+    \caption*{L: GRU temporal IQN}
+\end{minipage}
+\caption{Exemplos de previsão para \textit{missing} $0{,}5$.}
+\label{fig:forecasts_0p5}
+\end{figure}
+
+Visualmente, o GRU base tende a produzir previsões mais suavizadas e com maior
+desalinhamento em relação aos picos e vales observados. O GRU temporal acompanha
+melhor a estrutura oscilatória da série, especialmente nos cenários com dados
+faltantes. Nos cenários IQN, a mediana $q50$ fornece a previsão pontual, enquanto
+as bandas $q10$--$q90$ e $q05$--$q95$ representam a incerteza estimada; em alguns
+trechos, pontos extremos ficam fora das bandas, o que é consistente com a
+cobertura empírica abaixo da nominal observada nos resultados probabilísticos.
+
+
+\section{Discussão} Os resultados mostram que a codificação temporal foi o fator mais consistente de melhora no desempenho. Em todos os níveis de \textit{missing}, o GRU temporal obteve menor RMSE e MAE que o GRU base. Isso indica que fornecer timestamps relativos ao modelo ajuda a lidar com a amostragem temporal irregular causada pela remoção de observações. Nos exemplos de previsão, essa melhora aparece também visualmente: o GRU temporal acompanha melhor a fase da série e reduz o desalinhamento de picos e vales observado no GRU base.
+
+A IQN temporal apresentou desempenho pontual competitivo, mas não superou o GRU temporal determinístico em todos os cenários. Sua principal contribuição foi permitir a geração de previsões probabilísticas por meio de quantis. As bandas $q10$--$q90$ e $q05$--$q95$ acompanharam a maior parte da série observada, mas a cobertura empírica ficou abaixo da cobertura nominal. Isso indica que os intervalos produzidos foram informativos, porém levemente subcalibrados, isto é, estreitos demais em relação à variabilidade real da série.
 
 \section{Conclusão}
 
-A comparação experimental indica que o GRU com codificação temporal é superior
-ao GRU base nos oito cenários determinísticos avaliados. O ganho é mais
+    A comparação experimental indica que o\textbf{ GRU com codificação temporal é superior
+    ao GRU base nos oito cenários} determinísticos avaliados. O ganho é mais
 expressivo nos cenários com maior proporção de dados faltantes: com
 \textit{missing} $0{,}3$, o RMSE do GRU temporal foi $0{,}1697$, contra
 $0{,}2888$ do GRU base; com \textit{missing} $0{,}5$, foi $0{,}1818$, contra
