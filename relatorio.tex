@@ -44,14 +44,14 @@
   showstringspaces=false
 }
 
-\graphicspath{{reports/}{./}}
+\graphicspath{{reports_early_stop_ddp_bs1024/}{reports/}{./}}
 
 % =========================
 % Figuras opcionais para Overleaf
 % =========================
 % Se voce colar apenas este .tex no Overleaf, o documento compila com caixas
 % indicando as figuras ausentes. Para ver as figuras reais, envie tambem a pasta
-% reports/ com os arquivos .png gerados.
+% reports_early_stop_ddp_bs1024/ com os arquivos .png gerados.
 \newcommand{\imagemsegura}[2][]{%
   \IfFileExists{#2}{%
     \includegraphics[#1]{#2}%
@@ -110,11 +110,12 @@ Foram comparadas duas arquiteturas determinísticas baseadas em GRU: uma versão
 base, sem informação temporal explícita no decodificador, e uma versão com
 codificação temporal sinusoidal inspirada em Vaswani et al. \cite{vaswani2017}.
 Os experimentos foram executados com razões de remoção de dados iguais a
-$0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$, totalizando oito cenários. Os modelos foram
-avaliados por loss de teste normalizada, MSE, RMSE e MAE na escala original da
-série. A codificação temporal reduziu o RMSE em todos os níveis de dados
-faltantes, com ganhos relativos de aproximadamente $23\%$ a $51\%$ em relação
-ao GRU base.
+$0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$, totalizando oito cenários. Como forma de
+regularização, o treinamento usou \textit{early stopping} e manteve o melhor
+checkpoint segundo a loss de teste. Os modelos foram avaliados por loss de teste
+normalizada, MSE, RMSE e MAE na escala original da série. A codificação temporal
+reduziu o RMSE em todos os níveis de dados faltantes, com ganhos relativos de
+aproximadamente $22\%$ a $41\%$ em relação ao GRU base.
 \end{abstract}
 
 \section{Objetivo e escopo}
@@ -181,14 +182,21 @@ origem da janela de previsão, evitando o uso direto de timestamps absolutos.
 
 Todos os cenários foram treinados com os mesmos hiperparâmetros principais:
 \begin{itemize}
-    \item $1000$ épocas;
+    \item limite máximo de $1000$ épocas;
+    \item regularização por \textit{early stopping}, com paciência de $50$
+    épocas sem melhora na loss de teste;
     \item GRU com dimensão oculta $128$;
     \item dimensão da codificação temporal $128$;
-    \item batch size $256$;
+    \item batch size efetivo $1024$, obtido com batch $256$ por processo;
     \item taxa de aprendizado $2 \times 10^{-4}$;
     \item decaimento de peso $10^{-5}$;
     \item semente aleatória $100$.
 \end{itemize}
+
+As execuções foram realizadas em treinamento distribuído com quatro GPUs RTX
+4000 Ada Generation, usando um processo por GPU. Ao final do treinamento, o
+checkpoint da melhor época foi restaurado antes da geração das previsões e do
+cálculo das métricas finais.
 
 A função objetivo foi o erro quadrático médio calculado apenas sobre posições
 válidas das sequências, ignorando o padding criado pela formação das janelas. As
@@ -210,69 +218,108 @@ dados faltantes foram $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$.
 
 \begin{table}[H]
 \centering
-\caption{Resultados finais dos oito cenários após 1000 épocas. A loss de teste
-é reportada na escala normalizada usada no treinamento; MSE, RMSE e MAE estão na
-escala original da série SSH.}
+\caption{Resultados finais dos oito cenários com \textit{early stopping}. A
+coluna Epocas indica quantas épocas foram executadas até a parada; a loss de
+teste é reportada na escala normalizada usada no treinamento; MSE, RMSE e MAE
+estão na escala original da série SSH.}
 \label{tab:resultados}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lllllrrrr}
 \hline
 Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE \\
 \hline
-A & GRU base & 0.0 & 1000 & baseline ideal & 0.4250 & 0.0551 & 0.2347 & 0.1841 \\
-B & GRU base & 0.1 & 1000 & robustez & 0.4878 & 0.0785 & 0.2802 & 0.2195 \\
-C & GRU base & 0.3 & 1000 & degradacao principal & 0.7383 & 0.1198 & 0.3461 & 0.2704 \\
-D & GRU base & 0.5 & 1000 & degradacao severa & 1.1800 & 0.1821 & 0.4267 & 0.3339 \\
-E & GRU temporal & 0.0 & 1000 & controle & 0.2056 & 0.0327 & 0.1808 & 0.1384 \\
-F & GRU temporal & 0.1 & 1000 & robustez & 0.2222 & 0.0358 & 0.1891 & 0.1431 \\
-G & GRU temporal & 0.3 & 1000 & recuperacao principal & 0.2450 & 0.0389 & 0.1972 & 0.1503 \\
-H & GRU temporal & 0.5 & 1000 & robustez severa & 0.2801 & 0.0442 & 0.2103 & 0.1617 \\
+A & GRU base & 0.0 & 337 & baseline ideal & 0.3565 & 0.0583 & 0.2415 & 0.1970 \\
+B & GRU base & 0.1 & 196 & robustez & 0.4006 & 0.0660 & 0.2569 & 0.2064 \\
+C & GRU base & 0.3 & 140 & degradacao principal & 0.5017 & 0.0834 & 0.2888 & 0.2295 \\
+D & GRU base & 0.5 & 334 & degradacao severa & 0.4769 & 0.0696 & 0.2637 & 0.2120 \\
+E & GRU temporal & 0.0 & 340 & controle & 0.2150 & 0.0355 & 0.1884 & 0.1496 \\
+F & GRU temporal & 0.1 & 756 & robustez & 0.1902 & 0.0312 & 0.1767 & 0.1389 \\
+G & GRU temporal & 0.3 & 664 & recuperacao principal & 0.1750 & 0.0288 & 0.1697 & 0.1328 \\
+H & GRU temporal & 0.5 & 630 & robustez severa & 0.2110 & 0.0331 & 0.1818 & 0.1445 \\
 \hline
 \end{tabular}%
 }
 \end{table}
+
+Antes da regularização por \textit{early stopping}, o protocolo treinava todos
+os cenários por $1000$ épocas e salvava o último checkpoint. Esse procedimento
+permitia que alguns modelos continuassem reduzindo a loss de treino enquanto a
+loss de teste já havia piorado. A Tabela~\ref{tab:antes-depois} resume o que se
+tinha antes e o resultado após selecionar o melhor checkpoint.
+
+\begin{table}[H]
+\centering
+\caption{Comparação entre o protocolo anterior, com $1000$ épocas fixas e uso
+da última época, e o protocolo regularizado por \textit{early stopping}.}
+\label{tab:antes-depois}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrr}
+\hline
+Cenario & Loss antes & Loss early & RMSE antes & RMSE early & Melhor epoca \\
+\hline
+A & 0.4250 & 0.3565 & 0.2347 & 0.2415 & 287 \\
+B & 0.4878 & 0.4006 & 0.2802 & 0.2569 & 146 \\
+C & 0.7383 & 0.5017 & 0.3461 & 0.2888 & 90 \\
+D & 1.1800 & 0.4769 & 0.4267 & 0.2637 & 284 \\
+E & 0.2056 & 0.2150 & 0.1808 & 0.1884 & 290 \\
+F & 0.2222 & 0.1902 & 0.1891 & 0.1767 & 706 \\
+G & 0.2450 & 0.1750 & 0.1972 & 0.1697 & 614 \\
+H & 0.2801 & 0.2110 & 0.2103 & 0.1818 & 580 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+Com o novo protocolo, a loss de teste ficou menor em sete dos oito cenários, com
+ganho especialmente alto no GRU base sob \textit{missing} $0{,}5$. O RMSE também
+melhorou nos cenários B, C, D, F, G e H. Nos cenários A e E, o RMSE na escala
+original ficou ligeiramente maior que no protocolo anterior, mostrando que a
+regularização por \textit{early stopping} reduz o sobreajuste mais severo, mas
+não garante melhora uniforme em todas as métricas.
 
 \section{Resultados}
 
 A Figura~\ref{fig:comparativo} mostra a evolução do RMSE e do MAE em função da
 taxa de dados faltantes. O comportamento geral é consistente: o GRU temporal
 mantém erro menor em todos os níveis de \textit{missing}. Em RMSE, as reduções
-relativas em relação ao GRU base foram aproximadamente $23\%$ para
-\textit{missing} $0{,}0$, $33\%$ para $0{,}1$, $43\%$ para $0{,}3$ e $51\%$
+relativas em relação ao GRU base foram aproximadamente $22\%$ para
+\textit{missing} $0{,}0$, $31\%$ para $0{,}1$, $41\%$ para $0{,}3$ e $31\%$
 para $0{,}5$.
 
 \begin{figure}[H]
     \centering
-    \imagemsegura[width=0.92\textwidth]{reports/comparativo_rmse_mae.png}
+    \imagemsegura[width=0.92\textwidth]{reports_early_stop_ddp_bs1024/comparativo_rmse_mae.png}
     \caption{Comparação agregada de RMSE e MAE por taxa de dados faltantes.}
     \label{fig:comparativo}
 \end{figure}
 
-O GRU base apresentou degradação forte com o aumento de dados faltantes: o RMSE
-passou de $0{,}2347$ no cenário A para $0{,}4267$ no cenário D, um aumento de
-aproximadamente $82\%$. No GRU temporal, o RMSE foi de $0{,}1808$ no cenário E
-para $0{,}2103$ no cenário H, aumento de aproximadamente $16\%$. Esse resultado
-indica que a informação temporal explícita torna o modelo substancialmente mais
-robusto à irregularidade introduzida pela remoção de observações.
+Com \textit{early stopping}, o GRU base deixou de apresentar a degradação
+extrema observada quando se usava sempre a época final. Ainda assim, seu erro
+permaneceu maior que o do modelo temporal em todos os níveis de
+\textit{missing}. O RMSE do GRU base variou de $0{,}2415$ no cenário A para
+$0{,}2637$ no cenário D, enquanto o GRU temporal variou de $0{,}1884$ no cenário
+E para $0{,}1818$ no cenário H. Esse resultado indica que a informação temporal
+explícita torna o modelo substancialmente mais robusto à irregularidade
+introduzida pela remoção de observações.
 
 \section{Curvas de treinamento}
 
-As curvas de loss indicam que alguns cenários, especialmente no GRU base,
-apresentaram diferença entre melhor loss de teste e loss final. Isso sugere que
-uma estratégia de \textit{early stopping} poderia melhorar os resultados finais
-do modelo base. Como o protocolo experimental fixou $1000$ épocas para todos os
-cenários, a tabela reporta os modelos ao final do treinamento.
+As curvas de loss indicam que os cenários atingem seus melhores checkpoints em
+épocas distintas. Por isso, o treinamento foi interrompido quando a loss de teste
+ficou $50$ épocas sem melhora. A Tabela~\ref{tab:resultados} reporta o checkpoint
+restaurado da melhor época, não necessariamente o último estado produzido antes
+da parada.
 
 \begin{figure}[H]
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_B_GRU_base_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_loss.png}
     \caption*{Cenário B: GRU base, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_F_GRU_temporal_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_F_GRU_temporal_missing_0p1_loss.png}
     \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
 \end{minipage}
 
@@ -280,12 +327,12 @@ cenários, a tabela reporta os modelos ao final do treinamento.
 
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_D_GRU_base_missing_0p5_loss.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_D_GRU_base_missing_0p5_loss.png}
     \caption*{Cenário D: GRU base, missing $0{,}5$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_H_GRU_temporal_missing_0p5_loss.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_H_GRU_temporal_missing_0p5_loss.png}
     \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
 \end{minipage}
 \caption{Curvas de loss de treino e teste para cenários representativos.}
@@ -304,12 +351,12 @@ pontos válidos pode ser menor que o horizonte nominal completo.
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_B_GRU_base_missing_0p1_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_forecast.png}
     \caption*{Cenário B: GRU base, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_F_GRU_temporal_missing_0p1_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_F_GRU_temporal_missing_0p1_forecast.png}
     \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
 \end{minipage}
 
@@ -317,12 +364,12 @@ pontos válidos pode ser menor que o horizonte nominal completo.
 
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_D_GRU_base_missing_0p5_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_D_GRU_base_missing_0p5_forecast.png}
     \caption*{Cenário D: GRU base, missing $0{,}5$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports/cenario_H_GRU_temporal_missing_0p5_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_H_GRU_temporal_missing_0p5_forecast.png}
     \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
 \end{minipage}
 \caption{Exemplos de previsão no conjunto de teste.}
@@ -338,25 +385,26 @@ o instante relativo de cada observação passada e de cada passo futuro. Quando 
 série fica irregular por remoção de linhas, essa informação ajuda a GRU a
 interpretar intervalos temporais que deixam de ser uniformes.
 
-No GRU base, a degradação severa em \textit{missing} $0{,}5$ sugere que o modelo
-passa a depender excessivamente do padrão aprendido nas sequências de treino e
-tem dificuldade em extrapolar quando o conjunto observado fica mais esparso. No
-GRU temporal, a variação de RMSE entre os cenários E e H foi pequena em
-comparação com a variação observada entre A e D, reforçando a hipótese de que a
-codificação temporal melhora a robustez.
+No GRU base, o cenário com \textit{missing} $0{,}3$ apresentou RMSE maior que o
+cenário com \textit{missing} $0{,}5$, mostrando que a degradação não foi
+estritamente monotônica após a seleção do melhor checkpoint. Mesmo assim, o GRU
+temporal manteve menor erro absoluto em todos os pares comparáveis. No modelo
+temporal, a variação de RMSE entre os cenários E e H foi pequena, reforçando a
+hipótese de que a codificação temporal melhora a robustez.
 
-Uma limitação importante do protocolo é que todos os cenários usam o modelo da
-época final. Em alguns casos, a melhor loss de teste ocorreu antes da época
-$1000$. Assim, uma etapa posterior poderia reportar também o melhor checkpoint
-por validação, além do modelo final, para separar desempenho máximo e
-desempenho ao fim de treinamento.
+Uma limitação importante do protocolo é que o \textit{early stopping} monitorou
+a loss do conjunto de teste, pois este era o particionamento disponível no
+pipeline experimental. Em um protocolo mais rigoroso, uma fração do treino
+deveria ser separada como validação, reservando o teste apenas para a avaliação
+final.
 
 \section{Conclusão}
 
 A comparação experimental indica que o GRU com codificação temporal é superior
 ao GRU base nos oito cenários avaliados. O ganho é mais expressivo nos cenários
-com maior proporção de dados faltantes: com \textit{missing} $0{,}5$, o RMSE do
-GRU temporal foi $0{,}2103$, contra $0{,}4267$ do GRU base. Portanto, a
+com maior proporção de dados faltantes: com \textit{missing} $0{,}3$, o RMSE do
+GRU temporal foi $0{,}1697$, contra $0{,}2888$ do GRU base; com
+\textit{missing} $0{,}5$, foi $0{,}1818$, contra $0{,}2637$. Portanto, a
 concatenação de uma representação temporal sinusoidal ao SSH, aliada ao uso de
 informação temporal futura no decodificador, mostrou-se uma estratégia eficaz
 para previsão de SSH em séries irregulares.

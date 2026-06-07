@@ -159,6 +159,18 @@ class EvaluationResult:
     target_timestamps: list[np.ndarray]
 
 
+@dataclass(slots=True)
+class TrainingResult:
+    train_losses: list[float]
+    test_losses: list[float]
+    best_epoch: int
+    best_test_loss: float
+    selected_model_epoch: int
+    epochs_ran: int
+    early_stopped: bool
+    best_state_dict: dict[str, torch.Tensor] | None
+
+
 def load_data(file_path: pathlib.Path) -> pl.DataFrame:
     """Loads data from CSV, and sets datetime and feature types.
 
@@ -1030,8 +1042,42 @@ def plot_training_history(
     plot_results(train_losses, test_losses, num_epochs, hyperparameters, output_path)
 
 
+def unwrap_model(model: nn.Module) -> nn.Module:
+    """Returns the underlying model when wrapped by parallel training helpers."""
+
+    return model.module if hasattr(model, "module") else model
+
+
+def clone_state_dict_to_cpu(model: nn.Module) -> dict[str, torch.Tensor]:
+    """Copies model weights to CPU so the best checkpoint is independent of later updates."""
+
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in model.state_dict().items()
+    }
+
+
+def resolve_input_path(path_value: str) -> pathlib.Path:
+    input_path = pathlib.Path(path_value).expanduser()
+    if not input_path.is_absolute():
+        input_path = pathlib.Path.cwd() / input_path
+    return input_path.resolve()
+
+
+def load_model_weights(model: nn.Module, weights_path: pathlib.Path, device: torch.device) -> None:
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Initial weights not found: {weights_path}")
+
+    try:
+        state_dict = torch.load(weights_path, map_location=device, weights_only=True)
+    except TypeError:
+        state_dict = torch.load(weights_path, map_location=device)
+
+    model.load_state_dict(state_dict)
+
+
 def training_loop(
-    model: ARModel,
+    model: nn.Module,
     train_dataloader: DataLoader,
     test_dataloader: DataLoader,
     criterion: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
@@ -1040,12 +1086,20 @@ def training_loop(
     norm_statistics: tuple[torch.Tensor, torch.Tensor],
     num_epochs: int,
     view_size: int,
-) -> tuple[list[float], list[float]]:
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
+) -> TrainingResult:
     """Runs the epoch loop and collects training metrics."""
 
     log("\n--- Starting Training ---")
     train_losses = []
     test_losses = []
+    early_stopping_enabled = early_stopping_patience > 0
+    best_epoch = 0
+    best_test_loss = float("inf")
+    best_state_dict = None
+    epochs_without_improvement = 0
+    early_stopped = False
 
     for epoch in range(1, num_epochs + 1):
         if hasattr(train_dataloader.sampler, "set_epoch"):
@@ -1069,8 +1123,9 @@ def training_loop(
 
         distributed_barrier(device)
 
+        stop_training = False
         if is_main_process():
-            eval_model = model.module if is_distributed() and hasattr(model, "module") else model
+            eval_model = unwrap_model(model)
             eval_result = run_eval_epoch(
                 model=eval_model,
                 dataloader=test_dataloader,
@@ -1083,6 +1138,29 @@ def training_loop(
 
             test_losses.append(test_loss)
             log(f"Average Test Loss: {test_loss:.4f}")
+
+            if test_loss < best_test_loss - early_stopping_min_delta:
+                best_test_loss = test_loss
+                best_epoch = epoch
+                epochs_without_improvement = 0
+                if early_stopping_enabled:
+                    best_state_dict = clone_state_dict_to_cpu(eval_model)
+                log(f"New best Test Loss: {best_test_loss:.4f} at epoch {best_epoch}")
+            else:
+                epochs_without_improvement += 1
+                if early_stopping_enabled:
+                    log(
+                        "Early stopping patience: "
+                        f"{epochs_without_improvement}/{early_stopping_patience}"
+                    )
+
+            if early_stopping_enabled and epochs_without_improvement >= early_stopping_patience:
+                early_stopped = True
+                stop_training = True
+                log(
+                    "Early stopping triggered: "
+                    f"best epoch {best_epoch}, best test loss {best_test_loss:.4f}"
+                )
 
             plot_epoch_results(
                 epoch=epoch,
@@ -1098,10 +1176,30 @@ def training_loop(
                 #title=f"Epoch: {epoch} Loss Curves",
             #)
 
+        if is_distributed():
+            stop_tensor = torch.tensor(1 if stop_training else 0, device=device)
+            dist.broadcast(stop_tensor, src=0)
+            stop_training = bool(stop_tensor.item())
+
         distributed_barrier(device)
 
+        if stop_training:
+            break
+
     log("\n--- Training Complete ---")
-    return train_losses, test_losses
+    epochs_ran = len(train_losses)
+    selected_model_epoch = best_epoch if early_stopping_enabled else epochs_ran
+
+    return TrainingResult(
+        train_losses=train_losses,
+        test_losses=test_losses,
+        best_epoch=best_epoch,
+        best_test_loss=best_test_loss,
+        selected_model_epoch=selected_model_epoch,
+        epochs_ran=epochs_ran,
+        early_stopped=early_stopped,
+        best_state_dict=best_state_dict,
+    )
 
 
 def criterion_without_padding(loss_func:torch.nn.Module) -> Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]:
@@ -1154,7 +1252,9 @@ def main(args: argparse.Namespace) -> None:
         f"pos_encoding_dim={args.pos_encoding_dim}, "
         f"learning_rate={args.learning_rate}, "
         f"weight_decay={args.weight_decay}, "
-        f"sliding_window_step={args.sliding_window_step}"
+        f"sliding_window_step={args.sliding_window_step}, "
+        f"early_stopping_patience={args.early_stopping_patience}, "
+        f"early_stopping_min_delta={args.early_stopping_min_delta}"
     )
 
     prepared_data = data_preparation(
@@ -1178,6 +1278,13 @@ def main(args: argparse.Namespace) -> None:
         time_scale=args.time_scale,
         use_time_encoding=args.model_variant == "gru_temporal",
     ).to(device)
+    initial_weights_path = ""
+    if args.initial_weights_path:
+        resolved_initial_weights_path = resolve_input_path(args.initial_weights_path)
+        load_model_weights(model, resolved_initial_weights_path, device)
+        initial_weights_path = str(resolved_initial_weights_path)
+        log(f"Initial weights loaded from {resolved_initial_weights_path}")
+
     if distributed:
         model = nn.parallel.DistributedDataParallel(
             model,
@@ -1196,7 +1303,7 @@ def main(args: argparse.Namespace) -> None:
     )
 
     view_size = int(args.past_view_size)
-    train_losses, test_losses = training_loop(
+    training_result = training_loop(
         model=model,
         train_dataloader=train_dataloader,
         test_dataloader=test_dataloader,
@@ -1206,6 +1313,8 @@ def main(args: argparse.Namespace) -> None:
         norm_statistics=norm_statistics,
         num_epochs=args.num_epochs,
         view_size=view_size,
+        early_stopping_patience=int(args.early_stopping_patience),
+        early_stopping_min_delta=float(args.early_stopping_min_delta),
     )
 
     # --- Save Model ---
@@ -1216,12 +1325,19 @@ def main(args: argparse.Namespace) -> None:
         metrics_json_path = resolve_output_path(args.output_dir, args.metrics_json)
         loss_curve_path = resolve_output_path(args.output_dir, args.loss_curve_png)
 
-        model_to_save = model.module if hasattr(model, "module") else model
+        model_to_save = unwrap_model(model)
+        if int(args.early_stopping_patience) > 0 and training_result.best_state_dict is not None:
+            model_to_save.load_state_dict(training_result.best_state_dict)
+            log(
+                "Best checkpoint restored before final evaluation: "
+                f"epoch {training_result.selected_model_epoch}"
+            )
+
         torch.save(model_to_save.state_dict(), model_save_path)
         log(f"Model saved to {model_save_path}")
 
         # --- Results ---
-        eval_model = model.module if is_distributed() and hasattr(model, "module") else model
+        eval_model = unwrap_model(model)
         final_eval_result = run_eval_epoch(
             model=eval_model,
             dataloader=test_dataloader,
@@ -1234,11 +1350,17 @@ def main(args: argparse.Namespace) -> None:
             output_path=predictions_csv_path,
         )
         export_training_history_csv(
-            train_losses=train_losses,
-            test_losses=test_losses,
+            train_losses=training_result.train_losses,
+            test_losses=training_result.test_losses,
             output_path=history_csv_path,
         )
         regression_metrics = calculate_regression_metrics(final_eval_result)
+        selected_epoch_index = max(0, training_result.selected_model_epoch - 1)
+        selected_train_loss = (
+            training_result.train_losses[selected_epoch_index]
+            if training_result.train_losses
+            else float("nan")
+        )
         metrics = {
             "run_name": args.run_name,
             "model_variant": args.model_variant,
@@ -1246,6 +1368,13 @@ def main(args: argparse.Namespace) -> None:
             "objective": args.objective,
             "seed": int(args.seed),
             "num_epochs": int(args.num_epochs),
+            "epochs_ran": int(training_result.epochs_ran),
+            "best_epoch": int(training_result.best_epoch),
+            "selected_model_epoch": int(training_result.selected_model_epoch),
+            "early_stopped": bool(training_result.early_stopped),
+            "early_stopping_patience": int(args.early_stopping_patience),
+            "early_stopping_min_delta": float(args.early_stopping_min_delta),
+            "initial_weights_path": initial_weights_path,
             "batch_size": int(args.batch_size),
             "hidden_size": int(args.hidden_size),
             "learning_rate": float(args.learning_rate),
@@ -1255,23 +1384,25 @@ def main(args: argparse.Namespace) -> None:
             "sliding_window_step": int(args.sliding_window_step),
             "pos_encoding_dim": int(args.pos_encoding_dim),
             "time_scale": float(args.time_scale),
-            "final_train_loss": float(train_losses[-1]),
+            "final_train_loss": float(selected_train_loss),
             "final_test_loss": float(final_eval_result.avg_loss),
-            "best_test_loss": float(min(test_losses)),
+            "best_test_loss": float(training_result.best_test_loss),
             **regression_metrics,
         }
         export_metrics_json(metrics=metrics, output_path=metrics_json_path)
         plot_training_history(
-            train_losses,
-            test_losses,
-            args.num_epochs,
+            training_result.train_losses,
+            training_result.test_losses,
+            training_result.epochs_ran,
             hyperparameters={
                 "MODEL": args.model_variant,
                 "BATCH_SIZE": args.batch_size,
-                "NUM_EPOCHS": args.num_epochs,
+                "NUM_EPOCHS_MAX": args.num_epochs,
+                "EPOCHS_RAN": training_result.epochs_ran,
                 "LEARNING_RATE": args.learning_rate,
                 "DATA_REMOVAL_RATIO": args.data_removal_ratio,
                 "DEFAULT_POS_ENCODING_DIM": args.pos_encoding_dim,
+                "EARLY_STOPPING_PATIENCE": args.early_stopping_patience,
             },
             output_path=loss_curve_path,
         )
@@ -1406,6 +1537,12 @@ if __name__ == "__main__":
         help="Human-readable name for this experiment run.",
     )
     parser.add_argument(
+        "--initial_weights_path",
+        type=str,
+        default="",
+        help="Optional checkpoint used to initialize the model before training.",
+    )
+    parser.add_argument(
         "--objective",
         type=str,
         default="",
@@ -1430,6 +1567,18 @@ if __name__ == "__main__":
         default=SEED,
         help="Random seed used for initialization, dataloader shuffling, and missing-data simulation.",
     )
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=0,
+        help="Epochs without test-loss improvement before stopping. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--early_stopping_min_delta",
+        type=float,
+        default=0.0,
+        help="Minimum test-loss reduction required to count as an improvement.",
+    )
 
     parser.add_argument(
         "--pos_encoding_dim",
@@ -1446,4 +1595,8 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.early_stopping_patience < 0:
+        parser.error("--early_stopping_patience must be >= 0.")
+    if args.early_stopping_min_delta < 0.0:
+        parser.error("--early_stopping_min_delta must be >= 0.0.")
     main(args)

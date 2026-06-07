@@ -105,8 +105,7 @@ def build_command(
     scenario: Scenario,
     args: argparse.Namespace,
 ) -> list[str]:
-    return [
-        python_exe,
+    training_command = [
         str(script_path),
         "--model_variant",
         scenario.model_variant,
@@ -152,6 +151,10 @@ def build_command(
         str(args.learning_rate),
         "--weight_decay",
         str(args.weight_decay),
+        "--early_stopping_patience",
+        str(args.early_stopping_patience),
+        "--early_stopping_min_delta",
+        str(args.early_stopping_min_delta),
         "--pos_encoding_dim",
         str(args.pos_encoding_dim),
         "--time_scale",
@@ -159,6 +162,21 @@ def build_command(
         "--seed",
         str(args.seed),
     ]
+
+    if args.ddp:
+        return [
+            python_exe,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nnodes",
+            "1",
+            "--nproc_per_node",
+            str(args.nproc_per_node),
+            *training_command,
+        ]
+
+    return [python_exe, *training_command]
 
 
 def run_scenario(
@@ -185,7 +203,7 @@ def run_scenario(
     env.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
     if args.cpu:
         env["CUDA_VISIBLE_DEVICES"] = ""
-    elif gpu_id is not None:
+    elif gpu_id is not None and not args.ddp:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
     with log_path.open("w") as log_file:
@@ -231,6 +249,13 @@ def write_summary_csv(rows: list[dict[str, object]], output_path: pathlib.Path) 
         "model_label",
         "missing_ratio",
         "num_epochs",
+        "epochs_ran",
+        "best_epoch",
+        "selected_model_epoch",
+        "early_stopped",
+        "early_stopping_patience",
+        "early_stopping_min_delta",
+        "initial_weights_path",
         "objective",
         "final_train_loss",
         "final_test_loss",
@@ -274,13 +299,14 @@ def write_latex_table(rows: list[dict[str, object]], output_path: pathlib.Path) 
         r"\hline",
     ]
     for row in rows:
+        epochs_value = row.get("epochs_ran", row["num_epochs"])
         lines.append(
             " & ".join(
                 [
                     latex_escape(row["scenario"]),
                     latex_escape(row["model_label"]),
                     f"{float(row['missing_ratio']):.1f}",
-                    str(int(row["num_epochs"])),
+                    str(int(epochs_value)),
                     latex_escape(row["objective"]),
                     f"{float(row['final_test_loss']):.4f}",
                     f"{float(row['mse']):.4f}",
@@ -425,6 +451,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--skip_training", action="store_true")
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--ddp", action="store_true")
+    parser.add_argument("--nproc_per_node", "--nproc-per-node", type=int, default=0)
+    parser.add_argument("--effective_batch_size", "--effective-batch-size", type=int, default=0)
     parser.add_argument("--max_parallel", type=int, default=0)
     parser.add_argument("--torch_threads", type=int, default=8)
     parser.add_argument("--data_filename", default=DEFAULT_DATA_FILENAME)
@@ -438,10 +467,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_epochs", type=int, default=DEFAULT_NUM_EPOCHS)
     parser.add_argument("--learning_rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--weight_decay", type=float, default=DEFAULT_WEIGHT_DECAY)
+    parser.add_argument("--early_stopping_patience", type=int, default=0)
+    parser.add_argument("--early_stopping_min_delta", type=float, default=0.0)
     parser.add_argument("--pos_encoding_dim", type=int, default=DEFAULT_POS_ENCODING_DIM)
     parser.add_argument("--time_scale", type=float, default=DEFAULT_TIME_SCALE)
     parser.add_argument("--seed", type=int, default=SEED)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.early_stopping_patience < 0:
+        parser.error("--early_stopping_patience must be >= 0.")
+    if args.early_stopping_min_delta < 0.0:
+        parser.error("--early_stopping_min_delta must be >= 0.0.")
+    if args.nproc_per_node < 0:
+        parser.error("--nproc_per_node must be >= 0.")
+    if args.effective_batch_size < 0:
+        parser.error("--effective_batch_size must be >= 0.")
+    if args.ddp and args.cpu:
+        parser.error("--ddp cannot be combined with --cpu.")
+    return args
 
 
 def main() -> None:
@@ -452,17 +494,42 @@ def main() -> None:
 
     if not args.skip_training:
         gpu_count = 0 if args.cpu else get_gpu_count()
-        default_parallel = min(4, gpu_count) if gpu_count > 0 else 1
+        if args.ddp:
+            nproc_per_node = args.nproc_per_node if args.nproc_per_node > 0 else gpu_count
+            if nproc_per_node <= 1:
+                raise RuntimeError("--ddp requires at least 2 CUDA devices.")
+            if gpu_count > 0 and nproc_per_node > gpu_count:
+                raise RuntimeError(
+                    f"--nproc_per_node={nproc_per_node} exceeds available GPUs ({gpu_count})."
+                )
+            args.nproc_per_node = nproc_per_node
+            if args.effective_batch_size > 0:
+                if args.effective_batch_size % nproc_per_node != 0:
+                    raise RuntimeError(
+                        "--effective_batch_size must be divisible by --nproc_per_node."
+                    )
+                args.batch_size = args.effective_batch_size // nproc_per_node
+
+        default_parallel = 1 if args.ddp else (min(4, gpu_count) if gpu_count > 0 else 1)
         max_parallel = args.max_parallel if args.max_parallel > 0 else default_parallel
         max_parallel = max(1, max_parallel)
+        if args.ddp and max_parallel != 1:
+            print("DDP uses all selected GPUs per scenario; forcing max_parallel=1.")
+            max_parallel = 1
 
         print(
             f"Running {len(SCENARIOS)} scenarios with max_parallel={max_parallel} "
             f"and gpu_count={gpu_count}."
         )
+        if args.ddp:
+            print(
+                f"DDP enabled with nproc_per_node={args.nproc_per_node}, "
+                f"batch_size_per_process={args.batch_size}, "
+                f"effective_batch_size={args.batch_size * args.nproc_per_node}."
+            )
 
         gpu_queue: queue.Queue[int] | None = None
-        if gpu_count > 0:
+        if gpu_count > 0 and not args.ddp:
             gpu_queue = queue.Queue()
             for gpu_id in range(gpu_count):
                 gpu_queue.put(gpu_id)

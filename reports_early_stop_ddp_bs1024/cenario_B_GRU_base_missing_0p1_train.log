@@ -1,0 +1,1025 @@
+Command:
+.venv/bin/python -m torch.distributed.run --standalone --nnodes 1 --nproc_per_node 4 /home/matheuscm/RNN_with_positional_encoding/PCS5024_EP_Time_Series.py --model_variant gru_base --data_removal_ratio 0.1 --run_name cenario_B_GRU_base_missing_0p1 --objective robustez --output_dir /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024 --predictions_csv cenario_B_GRU_base_missing_0p1_predictions.csv --history_csv cenario_B_GRU_base_missing_0p1_history.csv --metrics_json cenario_B_GRU_base_missing_0p1_metrics.json --loss_curve_png cenario_B_GRU_base_missing_0p1_loss_raw.png --model_weights_path cenario_B_GRU_base_missing_0p1_model_weights.pth --data_filename data/santos_ssh.csv --split_date 2020-06-01 00:00:00 --past_len 8000 --future_len 2000 --sliding_window_step 25 --batch_size 256 --num_workers 0 --torch_threads 0 --hidden_size 128 --num_epochs 1000 --learning_rate 0.0002 --weight_decay 1e-05 --early_stopping_patience 50 --early_stopping_min_delta 0.0 --pos_encoding_dim 128 --time_scale 1.0 --seed 100
+
+
+*****************************************
+Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+*****************************************
+Using device: cuda:0
+CPU threads per process: 16
+CUDA devices available: 4
+Using DistributedDataParallel with 4 GPUs
+Hyperparameters: model_variant=gru_base, data_removal_ratio=0.1, batch_size_per_process=256, effective_batch_size=1024, hidden_size=128, pos_encoding_dim=128, learning_rate=0.0002, weight_decay=1e-05, sliding_window_step=25, early_stopping_patience=50, early_stopping_min_delta=0.0
+Train set size: 21293
+Test set size: 4320
+Scaling data using Train Mean: shape: (1, 1)
+┌──────────┐
+│ ssh      │
+│ ---      │
+│ f32      │
+╞══════════╡
+│ 0.840088 │
+└──────────┘, Train Std: shape: (1, 1)
+┌──────────┐
+│ ssh      │
+│ ---      │
+│ f32      │
+╞══════════╡
+│ 0.386142 │
+└──────────┘
+Applied missing-data simulation: ratio=0.10, train_kept=19164/21293, test_kept=3888/4320
+Creating sequences and dataloaders...
+x_train shape: torch.Size([8204, 749, 1]), y_train shape: torch.Size([8204, 194, 1])
+x_test shape: torch.Size([1328, 733, 1]), y_test shape: torch.Size([1328, 186, 1])
+
+--- Starting Training ---
+
+Epoch 1/1000
+Average Training Loss: 1.0571
+Average Test Loss: 0.7759
+New best Test Loss: 0.7759 at epoch 1
+
+Epoch 2/1000
+Average Training Loss: 1.0257
+Average Test Loss: 0.7814
+Early stopping patience: 1/50
+
+Epoch 3/1000
+Average Training Loss: 1.0116
+Average Test Loss: 0.7803
+Early stopping patience: 2/50
+
+Epoch 4/1000
+Average Training Loss: 0.9921
+Average Test Loss: 0.7758
+New best Test Loss: 0.7758 at epoch 4
+
+Epoch 5/1000
+Average Training Loss: 0.9909
+Average Test Loss: 0.7738
+New best Test Loss: 0.7738 at epoch 5
+
+Epoch 6/1000
+Average Training Loss: 1.0194
+Average Test Loss: 0.7710
+New best Test Loss: 0.7710 at epoch 6
+
+Epoch 7/1000
+Average Training Loss: 1.0086
+Average Test Loss: 0.7686
+New best Test Loss: 0.7686 at epoch 7
+
+Epoch 8/1000
+Average Training Loss: 0.9925
+Average Test Loss: 0.7644
+New best Test Loss: 0.7644 at epoch 8
+
+Epoch 9/1000
+Average Training Loss: 1.0302
+Average Test Loss: 0.7603
+New best Test Loss: 0.7603 at epoch 9
+
+Epoch 10/1000
+Average Training Loss: 0.9967
+Average Test Loss: 0.7586
+New best Test Loss: 0.7586 at epoch 10
+
+Epoch 11/1000
+Average Training Loss: 1.0220
+Average Test Loss: 0.7466
+New best Test Loss: 0.7466 at epoch 11
+
+Epoch 12/1000
+Average Training Loss: 0.9992
+Average Test Loss: 0.7416
+New best Test Loss: 0.7416 at epoch 12
+
+Epoch 13/1000
+Average Training Loss: 0.9673
+Average Test Loss: 0.7433
+Early stopping patience: 1/50
+
+Epoch 14/1000
+Average Training Loss: 0.9543
+Average Test Loss: 0.7337
+New best Test Loss: 0.7337 at epoch 14
+
+Epoch 15/1000
+Average Training Loss: 1.0039
+Average Test Loss: 0.7376
+Early stopping patience: 1/50
+
+Epoch 16/1000
+Average Training Loss: 0.9459
+Average Test Loss: 0.7321
+New best Test Loss: 0.7321 at epoch 16
+
+Epoch 17/1000
+Average Training Loss: 0.9801
+Average Test Loss: 0.7322
+Early stopping patience: 1/50
+
+Epoch 18/1000
+Average Training Loss: 0.9626
+Average Test Loss: 0.7305
+New best Test Loss: 0.7305 at epoch 18
+
+Epoch 19/1000
+Average Training Loss: 0.9726
+Average Test Loss: 0.7291
+New best Test Loss: 0.7291 at epoch 19
+
+Epoch 20/1000
+Average Training Loss: 0.9457
+Average Test Loss: 0.7319
+Early stopping patience: 1/50
+
+Epoch 21/1000
+Average Training Loss: 0.9460
+Average Test Loss: 0.7228
+New best Test Loss: 0.7228 at epoch 21
+
+Epoch 22/1000
+Average Training Loss: 0.9733
+Average Test Loss: 0.7222
+New best Test Loss: 0.7222 at epoch 22
+
+Epoch 23/1000
+Average Training Loss: 0.9464
+Average Test Loss: 0.7212
+New best Test Loss: 0.7212 at epoch 23
+
+Epoch 24/1000
+Average Training Loss: 0.9719
+Average Test Loss: 0.7192
+New best Test Loss: 0.7192 at epoch 24
+
+Epoch 25/1000
+Average Training Loss: 0.9979
+Average Test Loss: 0.7196
+Early stopping patience: 1/50
+
+Epoch 26/1000
+Average Training Loss: 0.9685
+Average Test Loss: 0.7098
+New best Test Loss: 0.7098 at epoch 26
+
+Epoch 27/1000
+Average Training Loss: 0.8532
+Average Test Loss: 0.8407
+Early stopping patience: 1/50
+
+Epoch 28/1000
+Average Training Loss: 0.8205
+Average Test Loss: 0.6087
+New best Test Loss: 0.6087 at epoch 28
+
+Epoch 29/1000
+Average Training Loss: 0.7146
+Average Test Loss: 0.5919
+New best Test Loss: 0.5919 at epoch 29
+
+Epoch 30/1000
+Average Training Loss: 0.6477
+Average Test Loss: 0.5828
+New best Test Loss: 0.5828 at epoch 30
+
+Epoch 31/1000
+Average Training Loss: 0.6490
+Average Test Loss: 0.5815
+New best Test Loss: 0.5815 at epoch 31
+
+Epoch 32/1000
+Average Training Loss: 0.6862
+Average Test Loss: 0.5707
+New best Test Loss: 0.5707 at epoch 32
+
+Epoch 33/1000
+Average Training Loss: 0.6580
+Average Test Loss: 0.5564
+New best Test Loss: 0.5564 at epoch 33
+
+Epoch 34/1000
+Average Training Loss: 0.6229
+Average Test Loss: 0.5690
+Early stopping patience: 1/50
+
+Epoch 35/1000
+Average Training Loss: 0.6261
+Average Test Loss: 0.5289
+New best Test Loss: 0.5289 at epoch 35
+
+Epoch 36/1000
+Average Training Loss: 0.6360
+Average Test Loss: 0.5362
+Early stopping patience: 1/50
+
+Epoch 37/1000
+Average Training Loss: 0.6302
+Average Test Loss: 0.5471
+Early stopping patience: 2/50
+
+Epoch 38/1000
+Average Training Loss: 0.6269
+Average Test Loss: 0.5376
+Early stopping patience: 3/50
+
+Epoch 39/1000
+Average Training Loss: 0.6106
+Average Test Loss: 0.5500
+Early stopping patience: 4/50
+
+Epoch 40/1000
+Average Training Loss: 0.5915
+Average Test Loss: 0.5282
+New best Test Loss: 0.5282 at epoch 40
+
+Epoch 41/1000
+Average Training Loss: 0.6292
+Average Test Loss: 0.5351
+Early stopping patience: 1/50
+
+Epoch 42/1000
+Average Training Loss: 0.6274
+Average Test Loss: 0.5543
+Early stopping patience: 2/50
+
+Epoch 43/1000
+Average Training Loss: 0.6051
+Average Test Loss: 0.5371
+Early stopping patience: 3/50
+
+Epoch 44/1000
+Average Training Loss: 0.6240
+Average Test Loss: 0.5604
+Early stopping patience: 4/50
+
+Epoch 45/1000
+Average Training Loss: 0.6059
+Average Test Loss: 0.5301
+Early stopping patience: 5/50
+
+Epoch 46/1000
+Average Training Loss: 0.6062
+Average Test Loss: 0.5258
+New best Test Loss: 0.5258 at epoch 46
+
+Epoch 47/1000
+Average Training Loss: 0.6329
+Average Test Loss: 0.5460
+Early stopping patience: 1/50
+
+Epoch 48/1000
+Average Training Loss: 0.5957
+Average Test Loss: 0.5528
+Early stopping patience: 2/50
+
+Epoch 49/1000
+Average Training Loss: 0.6060
+Average Test Loss: 0.5206
+New best Test Loss: 0.5206 at epoch 49
+
+Epoch 50/1000
+Average Training Loss: 0.6241
+Average Test Loss: 0.5247
+Early stopping patience: 1/50
+
+Epoch 51/1000
+Average Training Loss: 0.6107
+Average Test Loss: 0.5267
+Early stopping patience: 2/50
+
+Epoch 52/1000
+Average Training Loss: 0.6096
+Average Test Loss: 0.5422
+Early stopping patience: 3/50
+
+Epoch 53/1000
+Average Training Loss: 0.5876
+Average Test Loss: 0.5126
+New best Test Loss: 0.5126 at epoch 53
+
+Epoch 54/1000
+Average Training Loss: 0.6025
+Average Test Loss: 0.5292
+Early stopping patience: 1/50
+
+Epoch 55/1000
+Average Training Loss: 0.5875
+Average Test Loss: 0.5366
+Early stopping patience: 2/50
+
+Epoch 56/1000
+Average Training Loss: 0.6249
+Average Test Loss: 0.5159
+Early stopping patience: 3/50
+
+Epoch 57/1000
+Average Training Loss: 0.6037
+Average Test Loss: 0.5280
+Early stopping patience: 4/50
+
+Epoch 58/1000
+Average Training Loss: 0.5756
+Average Test Loss: 0.5151
+Early stopping patience: 5/50
+
+Epoch 59/1000
+Average Training Loss: 0.5913
+Average Test Loss: 0.5252
+Early stopping patience: 6/50
+
+Epoch 60/1000
+Average Training Loss: 0.5909
+Average Test Loss: 0.5181
+Early stopping patience: 7/50
+
+Epoch 61/1000
+Average Training Loss: 0.5879
+Average Test Loss: 0.5253
+Early stopping patience: 8/50
+
+Epoch 62/1000
+Average Training Loss: 0.5782
+Average Test Loss: 0.5213
+Early stopping patience: 9/50
+
+Epoch 63/1000
+Average Training Loss: 0.5890
+Average Test Loss: 0.5065
+New best Test Loss: 0.5065 at epoch 63
+
+Epoch 64/1000
+Average Training Loss: 0.6060
+Average Test Loss: 0.4972
+New best Test Loss: 0.4972 at epoch 64
+
+Epoch 65/1000
+Average Training Loss: 0.5989
+Average Test Loss: 0.5061
+Early stopping patience: 1/50
+
+Epoch 66/1000
+Average Training Loss: 0.5826
+Average Test Loss: 0.5290
+Early stopping patience: 2/50
+
+Epoch 67/1000
+Average Training Loss: 0.5674
+Average Test Loss: 0.5306
+Early stopping patience: 3/50
+
+Epoch 68/1000
+Average Training Loss: 0.5672
+Average Test Loss: 0.5143
+Early stopping patience: 4/50
+
+Epoch 69/1000
+Average Training Loss: 0.5941
+Average Test Loss: 0.4836
+New best Test Loss: 0.4836 at epoch 69
+
+Epoch 70/1000
+Average Training Loss: 0.5563
+Average Test Loss: 0.4574
+New best Test Loss: 0.4574 at epoch 70
+
+Epoch 71/1000
+Average Training Loss: 0.5256
+Average Test Loss: 0.4426
+New best Test Loss: 0.4426 at epoch 71
+
+Epoch 72/1000
+Average Training Loss: 0.5382
+Average Test Loss: 0.4987
+Early stopping patience: 1/50
+
+Epoch 73/1000
+Average Training Loss: 0.5224
+Average Test Loss: 0.5330
+Early stopping patience: 2/50
+
+Epoch 74/1000
+Average Training Loss: 0.5100
+Average Test Loss: 0.4607
+Early stopping patience: 3/50
+
+Epoch 75/1000
+Average Training Loss: 0.5072
+Average Test Loss: 0.4214
+New best Test Loss: 0.4214 at epoch 75
+
+Epoch 76/1000
+Average Training Loss: 0.5005
+Average Test Loss: 0.4264
+Early stopping patience: 1/50
+
+Epoch 77/1000
+Average Training Loss: 0.5042
+Average Test Loss: 0.4345
+Early stopping patience: 2/50
+
+Epoch 78/1000
+Average Training Loss: 0.5060
+Average Test Loss: 0.4270
+Early stopping patience: 3/50
+
+Epoch 79/1000
+Average Training Loss: 0.5092
+Average Test Loss: 0.4216
+Early stopping patience: 4/50
+
+Epoch 80/1000
+Average Training Loss: 0.5151
+Average Test Loss: 0.4358
+Early stopping patience: 5/50
+
+Epoch 81/1000
+Average Training Loss: 0.5228
+Average Test Loss: 0.4664
+Early stopping patience: 6/50
+
+Epoch 82/1000
+Average Training Loss: 0.4978
+Average Test Loss: 0.4319
+Early stopping patience: 7/50
+
+Epoch 83/1000
+Average Training Loss: 0.4922
+Average Test Loss: 0.4115
+New best Test Loss: 0.4115 at epoch 83
+
+Epoch 84/1000
+Average Training Loss: 0.5033
+Average Test Loss: 0.4230
+Early stopping patience: 1/50
+
+Epoch 85/1000
+Average Training Loss: 0.5138
+Average Test Loss: 0.4156
+Early stopping patience: 2/50
+
+Epoch 86/1000
+Average Training Loss: 0.5047
+Average Test Loss: 0.4276
+Early stopping patience: 3/50
+
+Epoch 87/1000
+Average Training Loss: 0.4822
+Average Test Loss: 0.4221
+Early stopping patience: 4/50
+
+Epoch 88/1000
+Average Training Loss: 0.5191
+Average Test Loss: 0.4194
+Early stopping patience: 5/50
+
+Epoch 89/1000
+Average Training Loss: 0.4826
+Average Test Loss: 0.4179
+Early stopping patience: 6/50
+
+Epoch 90/1000
+Average Training Loss: 0.5043
+Average Test Loss: 0.4127
+Early stopping patience: 7/50
+
+Epoch 91/1000
+Average Training Loss: 0.5107
+Average Test Loss: 0.4120
+Early stopping patience: 8/50
+
+Epoch 92/1000
+Average Training Loss: 0.4919
+Average Test Loss: 0.4097
+New best Test Loss: 0.4097 at epoch 92
+
+Epoch 93/1000
+Average Training Loss: 0.5033
+Average Test Loss: 0.4149
+Early stopping patience: 1/50
+
+Epoch 94/1000
+Average Training Loss: 0.4893
+Average Test Loss: 0.4175
+Early stopping patience: 2/50
+
+Epoch 95/1000
+Average Training Loss: 0.4823
+Average Test Loss: 0.4095
+New best Test Loss: 0.4095 at epoch 95
+
+Epoch 96/1000
+Average Training Loss: 0.4918
+Average Test Loss: 0.4052
+New best Test Loss: 0.4052 at epoch 96
+
+Epoch 97/1000
+Average Training Loss: 0.4927
+Average Test Loss: 0.4274
+Early stopping patience: 1/50
+
+Epoch 98/1000
+Average Training Loss: 0.5067
+Average Test Loss: 0.4138
+Early stopping patience: 2/50
+
+Epoch 99/1000
+Average Training Loss: 0.4790
+Average Test Loss: 0.4086
+Early stopping patience: 3/50
+
+Epoch 100/1000
+Average Training Loss: 0.4944
+Average Test Loss: 0.4087
+Early stopping patience: 4/50
+
+Epoch 101/1000
+Average Training Loss: 0.4932
+Average Test Loss: 0.4163
+Early stopping patience: 5/50
+
+Epoch 102/1000
+Average Training Loss: 0.5104
+Average Test Loss: 0.4213
+Early stopping patience: 6/50
+
+Epoch 103/1000
+Average Training Loss: 0.4837
+Average Test Loss: 0.4109
+Early stopping patience: 7/50
+
+Epoch 104/1000
+Average Training Loss: 0.4894
+Average Test Loss: 0.4114
+Early stopping patience: 8/50
+
+Epoch 105/1000
+Average Training Loss: 0.4922
+Average Test Loss: 0.4121
+Early stopping patience: 9/50
+
+Epoch 106/1000
+Average Training Loss: 0.5280
+Average Test Loss: 0.4194
+Early stopping patience: 10/50
+
+Epoch 107/1000
+Average Training Loss: 0.4799
+Average Test Loss: 0.4235
+Early stopping patience: 11/50
+
+Epoch 108/1000
+Average Training Loss: 0.4924
+Average Test Loss: 0.4028
+New best Test Loss: 0.4028 at epoch 108
+
+Epoch 109/1000
+Average Training Loss: 0.5007
+Average Test Loss: 0.4188
+Early stopping patience: 1/50
+
+Epoch 110/1000
+Average Training Loss: 0.4891
+Average Test Loss: 0.4096
+Early stopping patience: 2/50
+
+Epoch 111/1000
+Average Training Loss: 0.5042
+Average Test Loss: 0.4088
+Early stopping patience: 3/50
+
+Epoch 112/1000
+Average Training Loss: 0.4781
+Average Test Loss: 0.4074
+Early stopping patience: 4/50
+
+Epoch 113/1000
+Average Training Loss: 0.4999
+Average Test Loss: 0.4082
+Early stopping patience: 5/50
+
+Epoch 114/1000
+Average Training Loss: 0.4924
+Average Test Loss: 0.4093
+Early stopping patience: 6/50
+
+Epoch 115/1000
+Average Training Loss: 0.5255
+Average Test Loss: 0.4082
+Early stopping patience: 7/50
+
+Epoch 116/1000
+Average Training Loss: 0.4944
+Average Test Loss: 0.4067
+Early stopping patience: 8/50
+
+Epoch 117/1000
+Average Training Loss: 0.4844
+Average Test Loss: 0.4252
+Early stopping patience: 9/50
+
+Epoch 118/1000
+Average Training Loss: 0.5029
+Average Test Loss: 0.4176
+Early stopping patience: 10/50
+
+Epoch 119/1000
+Average Training Loss: 0.4876
+Average Test Loss: 0.4118
+Early stopping patience: 11/50
+
+Epoch 120/1000
+Average Training Loss: 0.4889
+Average Test Loss: 0.4128
+Early stopping patience: 12/50
+
+Epoch 121/1000
+Average Training Loss: 0.4946
+Average Test Loss: 0.4082
+Early stopping patience: 13/50
+
+Epoch 122/1000
+Average Training Loss: 0.4838
+Average Test Loss: 0.4075
+Early stopping patience: 14/50
+
+Epoch 123/1000
+Average Training Loss: 0.4783
+Average Test Loss: 0.4059
+Early stopping patience: 15/50
+
+Epoch 124/1000
+Average Training Loss: 0.4894
+Average Test Loss: 0.4262
+Early stopping patience: 16/50
+
+Epoch 125/1000
+Average Training Loss: 0.4803
+Average Test Loss: 0.4614
+Early stopping patience: 17/50
+
+Epoch 126/1000
+Average Training Loss: 0.5121
+Average Test Loss: 0.4173
+Early stopping patience: 18/50
+
+Epoch 127/1000
+Average Training Loss: 0.4837
+Average Test Loss: 0.4108
+Early stopping patience: 19/50
+
+Epoch 128/1000
+Average Training Loss: 0.4832
+Average Test Loss: 0.4065
+Early stopping patience: 20/50
+
+Epoch 129/1000
+Average Training Loss: 0.4784
+Average Test Loss: 0.4279
+Early stopping patience: 21/50
+
+Epoch 130/1000
+Average Training Loss: 0.5171
+Average Test Loss: 0.4179
+Early stopping patience: 22/50
+
+Epoch 131/1000
+Average Training Loss: 0.4785
+Average Test Loss: 0.4139
+Early stopping patience: 23/50
+
+Epoch 132/1000
+Average Training Loss: 0.4845
+Average Test Loss: 0.4078
+Early stopping patience: 24/50
+
+Epoch 133/1000
+Average Training Loss: 0.4832
+Average Test Loss: 0.4079
+Early stopping patience: 25/50
+
+Epoch 134/1000
+Average Training Loss: 0.4974
+Average Test Loss: 0.4036
+Early stopping patience: 26/50
+
+Epoch 135/1000
+Average Training Loss: 0.4778
+Average Test Loss: 0.4065
+Early stopping patience: 27/50
+
+Epoch 136/1000
+Average Training Loss: 0.4878
+Average Test Loss: 0.4012
+New best Test Loss: 0.4012 at epoch 136
+
+Epoch 137/1000
+Average Training Loss: 0.4900
+Average Test Loss: 0.4042
+Early stopping patience: 1/50
+
+Epoch 138/1000
+Average Training Loss: 0.4689
+Average Test Loss: 0.4024
+Early stopping patience: 2/50
+
+Epoch 139/1000
+Average Training Loss: 0.4852
+Average Test Loss: 0.4159
+Early stopping patience: 3/50
+
+Epoch 140/1000
+Average Training Loss: 0.4769
+Average Test Loss: 0.4030
+Early stopping patience: 4/50
+
+Epoch 141/1000
+Average Training Loss: 0.5084
+Average Test Loss: 0.4056
+Early stopping patience: 5/50
+
+Epoch 142/1000
+Average Training Loss: 0.4866
+Average Test Loss: 0.4067
+Early stopping patience: 6/50
+
+Epoch 143/1000
+Average Training Loss: 0.4976
+Average Test Loss: 0.4094
+Early stopping patience: 7/50
+
+Epoch 144/1000
+Average Training Loss: 0.5076
+Average Test Loss: 0.4077
+Early stopping patience: 8/50
+
+Epoch 145/1000
+Average Training Loss: 0.4853
+Average Test Loss: 0.4139
+Early stopping patience: 9/50
+
+Epoch 146/1000
+Average Training Loss: 0.4803
+Average Test Loss: 0.4006
+New best Test Loss: 0.4006 at epoch 146
+
+Epoch 147/1000
+Average Training Loss: 0.4742
+Average Test Loss: 0.4064
+Early stopping patience: 1/50
+
+Epoch 148/1000
+Average Training Loss: 0.5009
+Average Test Loss: 0.4159
+Early stopping patience: 2/50
+
+Epoch 149/1000
+Average Training Loss: 0.4780
+Average Test Loss: 0.4304
+Early stopping patience: 3/50
+
+Epoch 150/1000
+Average Training Loss: 0.4832
+Average Test Loss: 0.4081
+Early stopping patience: 4/50
+
+Epoch 151/1000
+Average Training Loss: 0.5188
+Average Test Loss: 0.4146
+Early stopping patience: 5/50
+
+Epoch 152/1000
+Average Training Loss: 0.4903
+Average Test Loss: 0.4055
+Early stopping patience: 6/50
+
+Epoch 153/1000
+Average Training Loss: 0.4702
+Average Test Loss: 0.4106
+Early stopping patience: 7/50
+
+Epoch 154/1000
+Average Training Loss: 0.5037
+Average Test Loss: 0.4093
+Early stopping patience: 8/50
+
+Epoch 155/1000
+Average Training Loss: 0.4989
+Average Test Loss: 0.4101
+Early stopping patience: 9/50
+
+Epoch 156/1000
+Average Training Loss: 0.4826
+Average Test Loss: 0.4158
+Early stopping patience: 10/50
+
+Epoch 157/1000
+Average Training Loss: 0.4828
+Average Test Loss: 0.4034
+Early stopping patience: 11/50
+
+Epoch 158/1000
+Average Training Loss: 0.4775
+Average Test Loss: 0.4125
+Early stopping patience: 12/50
+
+Epoch 159/1000
+Average Training Loss: 0.4759
+Average Test Loss: 0.4128
+Early stopping patience: 13/50
+
+Epoch 160/1000
+Average Training Loss: 0.4955
+Average Test Loss: 0.4077
+Early stopping patience: 14/50
+
+Epoch 161/1000
+Average Training Loss: 0.4910
+Average Test Loss: 0.4211
+Early stopping patience: 15/50
+
+Epoch 162/1000
+Average Training Loss: 0.4882
+Average Test Loss: 0.4209
+Early stopping patience: 16/50
+
+Epoch 163/1000
+Average Training Loss: 0.4768
+Average Test Loss: 0.4017
+Early stopping patience: 17/50
+
+Epoch 164/1000
+Average Training Loss: 0.4911
+Average Test Loss: 0.4025
+Early stopping patience: 18/50
+
+Epoch 165/1000
+Average Training Loss: 0.4895
+Average Test Loss: 0.4131
+Early stopping patience: 19/50
+
+Epoch 166/1000
+Average Training Loss: 0.4772
+Average Test Loss: 0.4083
+Early stopping patience: 20/50
+
+Epoch 167/1000
+Average Training Loss: 0.4895
+Average Test Loss: 0.4084
+Early stopping patience: 21/50
+
+Epoch 168/1000
+Average Training Loss: 0.4941
+Average Test Loss: 0.4079
+Early stopping patience: 22/50
+
+Epoch 169/1000
+Average Training Loss: 0.4797
+Average Test Loss: 0.4040
+Early stopping patience: 23/50
+
+Epoch 170/1000
+Average Training Loss: 0.4962
+Average Test Loss: 0.4040
+Early stopping patience: 24/50
+
+Epoch 171/1000
+Average Training Loss: 0.4958
+Average Test Loss: 0.4176
+Early stopping patience: 25/50
+
+Epoch 172/1000
+Average Training Loss: 0.4855
+Average Test Loss: 0.4181
+Early stopping patience: 26/50
+
+Epoch 173/1000
+Average Training Loss: 0.4930
+Average Test Loss: 0.4138
+Early stopping patience: 27/50
+
+Epoch 174/1000
+Average Training Loss: 0.5091
+Average Test Loss: 0.4227
+Early stopping patience: 28/50
+
+Epoch 175/1000
+Average Training Loss: 0.5019
+Average Test Loss: 0.4090
+Early stopping patience: 29/50
+
+Epoch 176/1000
+Average Training Loss: 0.4647
+Average Test Loss: 0.4080
+Early stopping patience: 30/50
+
+Epoch 177/1000
+Average Training Loss: 0.4822
+Average Test Loss: 0.4030
+Early stopping patience: 31/50
+
+Epoch 178/1000
+Average Training Loss: 0.4822
+Average Test Loss: 0.4049
+Early stopping patience: 32/50
+
+Epoch 179/1000
+Average Training Loss: 0.5036
+Average Test Loss: 0.4081
+Early stopping patience: 33/50
+
+Epoch 180/1000
+Average Training Loss: 0.4725
+Average Test Loss: 0.4129
+Early stopping patience: 34/50
+
+Epoch 181/1000
+Average Training Loss: 0.4687
+Average Test Loss: 0.4070
+Early stopping patience: 35/50
+
+Epoch 182/1000
+Average Training Loss: 0.5087
+Average Test Loss: 0.4056
+Early stopping patience: 36/50
+
+Epoch 183/1000
+Average Training Loss: 0.4972
+Average Test Loss: 0.4092
+Early stopping patience: 37/50
+
+Epoch 184/1000
+Average Training Loss: 0.4884
+Average Test Loss: 0.4065
+Early stopping patience: 38/50
+
+Epoch 185/1000
+Average Training Loss: 0.5144
+Average Test Loss: 0.4083
+Early stopping patience: 39/50
+
+Epoch 186/1000
+Average Training Loss: 0.4820
+Average Test Loss: 0.4234
+Early stopping patience: 40/50
+
+Epoch 187/1000
+Average Training Loss: 0.4867
+Average Test Loss: 0.4294
+Early stopping patience: 41/50
+
+Epoch 188/1000
+Average Training Loss: 0.4963
+Average Test Loss: 0.4202
+Early stopping patience: 42/50
+
+Epoch 189/1000
+Average Training Loss: 0.4971
+Average Test Loss: 0.4119
+Early stopping patience: 43/50
+
+Epoch 190/1000
+Average Training Loss: 0.4682
+Average Test Loss: 0.4068
+Early stopping patience: 44/50
+
+Epoch 191/1000
+Average Training Loss: 0.5159
+Average Test Loss: 0.4208
+Early stopping patience: 45/50
+
+Epoch 192/1000
+Average Training Loss: 0.4861
+Average Test Loss: 0.4206
+Early stopping patience: 46/50
+
+Epoch 193/1000
+Average Training Loss: 0.4884
+Average Test Loss: 0.4107
+Early stopping patience: 47/50
+
+Epoch 194/1000
+Average Training Loss: 0.4623
+Average Test Loss: 0.4059
+Early stopping patience: 48/50
+
+Epoch 195/1000
+Average Training Loss: 0.4982
+Average Test Loss: 0.4267
+Early stopping patience: 49/50
+
+Epoch 196/1000
+Average Training Loss: 0.5003
+Average Test Loss: 0.4297
+Early stopping patience: 50/50
+Early stopping triggered: best epoch 146, best test loss 0.4006
+
+--- Training Complete ---
+Best checkpoint restored before final evaluation: epoch 146
+Model saved to /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_model_weights.pth
+Test predictions CSV saved to /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_predictions.csv
+Training history CSV saved to /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_history.csv
+Metrics JSON saved to /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_metrics.json
+Loss curve saved to /home/matheuscm/RNN_with_positional_encoding/reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_loss_raw.png
+Script finished.
