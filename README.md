@@ -138,12 +138,6 @@ python3 run_reports.py \
   relatorio final.
 - `relatorio.tex`: fonte LaTeX do relatorio.
 
-## Relatorio no Overleaf
-
-Para compilar o relatorio no Overleaf, envie `relatorio.tex` e a pasta
-`reports_iqn_temporal/` com as figuras `.png`. Se alguma figura estiver ausente,
-o LaTeX compila mesmo assim e mostra uma caixa indicando qual arquivo falta.
-
 ## Estrutura
 
 ```text
