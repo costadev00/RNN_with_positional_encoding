@@ -44,14 +44,14 @@
   showstringspaces=false
 }
 
-\graphicspath{{reports_early_stop_ddp_bs1024/}{reports/}{./}}
+\graphicspath{{reports_iqn_temporal/}{./}}
 
 % =========================
 % Figuras opcionais para Overleaf
 % =========================
 % Se voce colar apenas este .tex no Overleaf, o documento compila com caixas
 % indicando as figuras ausentes. Para ver as figuras reais, envie tambem a pasta
-% reports_early_stop_ddp_bs1024/ com os arquivos .png gerados.
+% reports_iqn_temporal/ com os arquivos .png gerados.
 \newcommand{\imagemsegura}[2][]{%
   \IfFileExists{#2}{%
     \includegraphics[#1]{#2}%
@@ -69,9 +69,9 @@
 % =========================
 % Dados editáveis do trabalho
 % =========================
-\newcommand{\tituloTrabalho}{Previsão de Séries Temporais de SSH com GRU e Codificação Temporal}
-\newcommand{\nomeAutor}{Nome do Aluno}
-\newcommand{\numeroUSP}{NUSP}
+\newcommand{\tituloTrabalho}{Previsão de Séries Temporais de SSH com GRU, Codificação Temporal e IQN}
+\newcommand{\nomeAutor}{Matheus Costa Monteiro}
+\newcommand{\numeroUSP}{17756099}
 \newcommand{\disciplina}{PCS5024 -- Aprendizado Estatístico}
 \newcommand{\dataEntrega}{\today}
 \newcommand{\linkRepositorio}{}
@@ -109,26 +109,27 @@ do mar SSH (\textit{sea surface height}) sob diferentes níveis de dados faltant
 Foram comparadas duas arquiteturas determinísticas baseadas em GRU: uma versão
 base, sem informação temporal explícita no decodificador, e uma versão com
 codificação temporal sinusoidal inspirada em Vaswani et al. \cite{vaswani2017}.
-Os experimentos foram executados com razões de remoção de dados iguais a
-$0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$, totalizando oito cenários. Como forma de
-regularização, o treinamento usou \textit{early stopping} e manteve o melhor
-checkpoint segundo a loss de teste. Os modelos foram avaliados por loss de teste
-normalizada, MSE, RMSE e MAE na escala original da série. A codificação temporal
-reduziu o RMSE em todos os níveis de dados faltantes, com ganhos relativos de
-aproximadamente $22\%$ a $41\%$ em relação ao GRU base.
+Além disso, foi implementada uma extensão probabilística com IQN
+(\textit{Implicit Quantile Networks}), conforme Gouttes et al. \cite{gouttes2021},
+para estimar quantis e intervalos de previsão. Os experimentos foram executados
+com razões de remoção de dados iguais a $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$,
+totalizando doze cenários. A codificação temporal reduziu o RMSE em todos os
+níveis de dados faltantes, com ganhos relativos de aproximadamente $22\%$ a
+$41\%$ em relação ao GRU base. A IQN produziu previsões probabilísticas com
+cobertura empírica entre $71\%$ e $79\%$ para o intervalo nominal de $80\%$ e
+entre $84\%$ e $89\%$ para o intervalo nominal de $90\%$.
 \end{abstract}
 
 \section{Objetivo e escopo}
 
 O objetivo do experimento foi comparar a robustez de modelos GRU para previsão
-de SSH quando parte das observações da série temporal é removida. A comparação
-foi organizada em oito cenários, quatro para o GRU base e quatro para o GRU com
-codificação temporal. O foco deste relatório é a etapa determinística do
-trabalho: previsão pontual, comparação entre arquiteturas e avaliação sob dados
-faltantes. O enunciado também menciona extensões probabilísticas com IQN
-\cite{gouttes2021}; essa etapa é discutida como continuação natural, mas os
-resultados quantitativos apresentados aqui correspondem aos modelos GRU
-determinísticos executados.
+de SSH quando parte das observações da série temporal é removida e, em seguida,
+estender o pipeline temporal para produzir previsões probabilísticas. A
+comparação determinística foi organizada em oito cenários, quatro para o GRU
+base e quatro para o GRU com codificação temporal. A etapa probabilística
+adicionou quatro cenários com IQN acoplada ao GRU temporal, usando os mesmos
+níveis de \textit{missing}. Assim, o relatório cobre tanto previsão pontual
+quanto estimativas de incerteza por quantis.
 
 \section{Base de dados e preparação}
 
@@ -178,6 +179,26 @@ temporal dos instantes futuros, permitindo que o modelo use explicitamente a
 posição relativa de cada passo previsto. Os timestamps são sempre relativos à
 origem da janela de previsão, evitando o uso direto de timestamps absolutos.
 
+\subsection{GRU temporal com IQN}
+
+A extensão probabilística reutiliza o codificador e o decodificador do GRU
+temporal, mas substitui a cabeça determinística por uma cabeça IQN. Durante o
+treinamento, para cada observação válida e passo futuro é amostrado um valor
+$\tau \sim U(0,1)$. Esse valor é codificado por uma base cossenoidal,
+seguindo a formulação de Gouttes et al. \cite{gouttes2021}:
+
+\begin{equation}
+    \phi(\tau) = ReLU\left(\sum_{i=0}^{n-1}
+    \cos(\pi i \tau)w_i + b_i\right).
+\end{equation}
+
+O vetor $\phi(\tau)$ é combinado ao estado oculto produzido pelo decodificador
+por produto elemento a elemento na forma $h_t \odot (1 + \phi(\tau))$. Em
+seguida, uma pequena rede MLP gera a previsão associada ao quantil $\tau$. Na
+inferência, foram usadas $100$ amostras determinísticas de $\tau$ para estimar
+os quantis empíricos $q05$, $q10$, $q50$, $q90$ e $q95$. A mediana $q50$ foi
+usada como previsão pontual da IQN.
+
 \section{Treinamento e métricas}
 
 Todos os cenários foram treinados com os mesmos hiperparâmetros principais:
@@ -193,14 +214,28 @@ Todos os cenários foram treinados com os mesmos hiperparâmetros principais:
     \item semente aleatória $100$.
 \end{itemize}
 
+Nos cenários IQN, foram usadas $8$ amostras de $\tau$ por ponto futuro durante
+o treinamento, $100$ amostras durante a avaliação e dimensão $64$ para o
+embedding de $\tau$.
+
 As execuções foram realizadas em treinamento distribuído com quatro GPUs RTX
 4000 Ada Generation, usando um processo por GPU. Ao final do treinamento, o
 checkpoint da melhor época foi restaurado antes da geração das previsões e do
 cálculo das métricas finais.
 
-A função objetivo foi o erro quadrático médio calculado apenas sobre posições
-válidas das sequências, ignorando o padding criado pela formação das janelas. As
-métricas finais foram calculadas na escala original da SSH:
+Nos modelos determinísticos, a função objetivo foi o erro quadrático médio
+calculado apenas sobre posições válidas das sequências, ignorando o padding
+criado pela formação das janelas. Nos cenários IQN, a função objetivo foi a
+\textit{pinball loss}, também chamada de \textit{quantile loss}:
+
+\begin{equation}
+    L_\tau(y, \hat{y}) =
+    \max \left(\tau (y-\hat{y}), (\tau-1)(y-\hat{y})\right).
+\end{equation}
+
+Assim como no MSE, a loss de quantis foi calculada apenas nas posições válidas,
+desconsiderando o padding. As métricas finais foram calculadas na escala
+original da SSH:
 
 \begin{equation}
     MSE = \frac{1}{N}\sum_{i=1}^{N}(y_i - \hat{y}_i)^2,
@@ -210,116 +245,174 @@ métricas finais foram calculadas na escala original da SSH:
     MAE = \frac{1}{N}\sum_{i=1}^{N}|y_i - \hat{y}_i|.
 \end{equation}
 
+Para IQN, as métricas pontuais usam $q50$ como $\hat{y}$. Também foram
+calculadas a quantile loss, a cobertura empírica dos intervalos $q10$--$q90$ e
+$q05$--$q95$, e a largura média desses intervalos. A coluna \textit{Loss teste}
+vem da função objetivo usada durante o treinamento, na escala normalizada. Já a
+coluna QLoss reportada nas tabelas foi recalculada sobre os quantis
+desnormalizados, na escala original da SSH.
+
+\section{Implementação no pipeline}
+
+A implementação foi concentrada em dois pontos do código. Em
+\texttt{PCS5024\_EP\_Time\_Series.py}, foi adicionada a variante
+\texttt{gru\_temporal\_iqn}. Essa variante reaproveita o codificador e o
+decodificador do GRU temporal e troca apenas a cabeça de saída por uma cabeça
+IQN. O treinamento amostra valores de $\tau$ a cada passo válido da sequência,
+aplica a codificação cossenoidal de $\tau$, combina essa representação ao estado
+oculto do decodificador e otimiza a \textit{pinball loss} mascarada por
+\texttt{target\_lengths}. Na avaliação, uma grade determinística de $100$
+valores de $\tau$ é usada para estimar os quantis exportados.
+
+Para manter compatibilidade com o restante do pipeline, a mediana $q50$ é
+gravada também como \texttt{Y\_hat}. Assim, os CSVs e as métricas pontuais
+continuam tendo o mesmo formato dos cenários determinísticos, enquanto os
+cenários IQN adicionam as colunas \texttt{q05}, \texttt{q10}, \texttt{q50},
+\texttt{q90}, \texttt{q95}, \texttt{interval\_width\_80} e
+\texttt{interval\_width\_90}. Os arquivos JSON de métricas também passaram a
+incluir \texttt{quantile\_loss}, coberturas empíricas e larguras médias dos
+intervalos.
+
+Em \texttt{run\_reports.py}, foram preservados os cenários determinísticos A--H
+e adicionados os cenários I--L com \texttt{gru\_temporal\_iqn} para
+\textit{missing} $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$. O gerador de relatórios
+também foi atualizado para produzir gráficos com bandas probabilísticas nos
+cenários IQN, além dos gráficos agregados de cobertura nominal versus empírica e
+largura média dos intervalos. A execução final foi salva na pasta
+\texttt{reports\_iqn\_temporal}.
+
 \section{Cenários experimentais}
 
-Os oito cenários executados estão resumidos na Tabela~\ref{tab:resultados}. Os
-cenários A--D usam o GRU base, enquanto E--H usam o GRU temporal. As razões de
-dados faltantes foram $0{,}0$, $0{,}1$, $0{,}3$ e $0{,}5$.
+Foram executados doze cenários, resumidos na Tabela~\ref{tab:resultados}. Os
+cenários A--D usam o GRU base, E--H usam o GRU temporal determinístico, e I--L
+usam o GRU temporal com IQN. As razões de dados faltantes foram $0{,}0$,
+$0{,}1$, $0{,}3$ e $0{,}5$.
 
 \begin{table}[H]
 \centering
-\caption{Resultados finais dos oito cenários com \textit{early stopping}. A
-coluna Epocas indica quantas épocas foram executadas até a parada; a loss de
-teste é reportada na escala normalizada usada no treinamento; MSE, RMSE e MAE
-estão na escala original da série SSH.}
+\caption{Resultados finais dos doze cenários com \textit{early stopping}. A
+loss de teste é MSE normalizado para modelos determinísticos e quantile loss
+normalizada para IQN. MSE, RMSE e MAE estão na escala original da SSH; nos
+cenários IQN, essas métricas usam a mediana $q50$. A coluna QLoss é calculada na
+escala original da SSH.}
 \label{tab:resultados}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lllllrrrr}
+\begin{tabular}{lllllrrrrrrr}
 \hline
-Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE \\
+Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE & QLoss & Cob80 & Cob90 \\
 \hline
-A & GRU base & 0.0 & 337 & baseline ideal & 0.3565 & 0.0583 & 0.2415 & 0.1970 \\
-B & GRU base & 0.1 & 196 & robustez & 0.4006 & 0.0660 & 0.2569 & 0.2064 \\
-C & GRU base & 0.3 & 140 & degradacao principal & 0.5017 & 0.0834 & 0.2888 & 0.2295 \\
-D & GRU base & 0.5 & 334 & degradacao severa & 0.4769 & 0.0696 & 0.2637 & 0.2120 \\
-E & GRU temporal & 0.0 & 340 & controle & 0.2150 & 0.0355 & 0.1884 & 0.1496 \\
-F & GRU temporal & 0.1 & 756 & robustez & 0.1902 & 0.0312 & 0.1767 & 0.1389 \\
-G & GRU temporal & 0.3 & 664 & recuperacao principal & 0.1750 & 0.0288 & 0.1697 & 0.1328 \\
-H & GRU temporal & 0.5 & 630 & robustez severa & 0.2110 & 0.0331 & 0.1818 & 0.1445 \\
-\hline
-\end{tabular}%
-}
-\end{table}
-
-Antes da regularização por \textit{early stopping}, o protocolo treinava todos
-os cenários por $1000$ épocas e salvava o último checkpoint. Esse procedimento
-permitia que alguns modelos continuassem reduzindo a loss de treino enquanto a
-loss de teste já havia piorado. A Tabela~\ref{tab:antes-depois} resume o que se
-tinha antes e o resultado após selecionar o melhor checkpoint.
-
-\begin{table}[H]
-\centering
-\caption{Comparação entre o protocolo anterior, com $1000$ épocas fixas e uso
-da última época, e o protocolo regularizado por \textit{early stopping}.}
-\label{tab:antes-depois}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrr}
-\hline
-Cenario & Loss antes & Loss early & RMSE antes & RMSE early & Melhor epoca \\
-\hline
-A & 0.4250 & 0.3565 & 0.2347 & 0.2415 & 287 \\
-B & 0.4878 & 0.4006 & 0.2802 & 0.2569 & 146 \\
-C & 0.7383 & 0.5017 & 0.3461 & 0.2888 & 90 \\
-D & 1.1800 & 0.4769 & 0.4267 & 0.2637 & 284 \\
-E & 0.2056 & 0.2150 & 0.1808 & 0.1884 & 290 \\
-F & 0.2222 & 0.1902 & 0.1891 & 0.1767 & 706 \\
-G & 0.2450 & 0.1750 & 0.1972 & 0.1697 & 614 \\
-H & 0.2801 & 0.2110 & 0.2103 & 0.1818 & 580 \\
+A & GRU base & 0.0 & 337 & baseline ideal & 0.3565 & 0.0583 & 0.2415 & 0.1970 &  &  &  \\
+B & GRU base & 0.1 & 196 & robustez & 0.4006 & 0.0660 & 0.2569 & 0.2064 &  &  &  \\
+C & GRU base & 0.3 & 140 & degradação principal & 0.5017 & 0.0834 & 0.2888 & 0.2295 &  &  &  \\
+D & GRU base & 0.5 & 334 & degradação severa & 0.4769 & 0.0696 & 0.2637 & 0.2120 &  &  &  \\
+E & GRU temporal & 0.0 & 340 & controle & 0.2150 & 0.0355 & 0.1884 & 0.1496 &  &  &  \\
+F & GRU temporal & 0.1 & 756 & robustez & 0.1902 & 0.0312 & 0.1767 & 0.1389 &  &  &  \\
+G & GRU temporal & 0.3 & 664 & recuperação principal & 0.1750 & 0.0288 & 0.1697 & 0.1328 &  &  &  \\
+H & GRU temporal & 0.5 & 630 & robustez severa & 0.2110 & 0.0331 & 0.1818 & 0.1445 &  &  &  \\
+I & GRU temporal IQN & 0.0 & 869 & IQN controle & 0.1093 & 0.0259 & 0.1611 & 0.1250 & 0.0304 & 0.7680 & 0.8759 \\
+J & GRU temporal IQN & 0.1 & 976 & IQN robustez & 0.1095 & 0.0249 & 0.1577 & 0.1240 & 0.0299 & 0.7283 & 0.8564 \\
+K & GRU temporal IQN & 0.3 & 342 & IQN recuperação principal & 0.1408 & 0.0423 & 0.2058 & 0.1634 & 0.0387 & 0.7867 & 0.8936 \\
+L & GRU temporal IQN & 0.5 & 590 & IQN robustez severa & 0.1292 & 0.0324 & 0.1800 & 0.1426 & 0.0343 & 0.7136 & 0.8396 \\
 \hline
 \end{tabular}%
 }
 \end{table}
 
-Com o novo protocolo, a loss de teste ficou menor em sete dos oito cenários, com
-ganho especialmente alto no GRU base sob \textit{missing} $0{,}5$. O RMSE também
-melhorou nos cenários B, C, D, F, G e H. Nos cenários A e E, o RMSE na escala
-original ficou ligeiramente maior que no protocolo anterior, mostrando que a
-regularização por \textit{early stopping} reduz o sobreajuste mais severo, mas
-não garante melhora uniforme em todas as métricas.
-
-\section{Resultados}
+\section{Resultados determinísticos}
 
 A Figura~\ref{fig:comparativo} mostra a evolução do RMSE e do MAE em função da
-taxa de dados faltantes. O comportamento geral é consistente: o GRU temporal
-mantém erro menor em todos os níveis de \textit{missing}. Em RMSE, as reduções
-relativas em relação ao GRU base foram aproximadamente $22\%$ para
-\textit{missing} $0{,}0$, $31\%$ para $0{,}1$, $41\%$ para $0{,}3$ e $31\%$
-para $0{,}5$.
+taxa de dados faltantes. O GRU temporal manteve erro menor que o GRU base em
+todos os níveis de \textit{missing}. Em RMSE, as reduções relativas foram
+aproximadamente $22\%$ para \textit{missing} $0{,}0$, $31\%$ para $0{,}1$,
+$41\%$ para $0{,}3$ e $31\%$ para $0{,}5$. Em MAE, os ganhos ficaram entre
+$24\%$ e $42\%$.
 
 \begin{figure}[H]
     \centering
-    \imagemsegura[width=0.92\textwidth]{reports_early_stop_ddp_bs1024/comparativo_rmse_mae.png}
+    \imagemsegura[width=0.92\textwidth]{reports_iqn_temporal/comparativo_rmse_mae.png}
     \caption{Comparação agregada de RMSE e MAE por taxa de dados faltantes.}
     \label{fig:comparativo}
 \end{figure}
 
-Com \textit{early stopping}, o GRU base deixou de apresentar a degradação
-extrema observada quando se usava sempre a época final. Ainda assim, seu erro
-permaneceu maior que o do modelo temporal em todos os níveis de
-\textit{missing}. O RMSE do GRU base variou de $0{,}2415$ no cenário A para
-$0{,}2637$ no cenário D, enquanto o GRU temporal variou de $0{,}1884$ no cenário
-E para $0{,}1818$ no cenário H. Esse resultado indica que a informação temporal
-explícita torna o modelo substancialmente mais robusto à irregularidade
-introduzida pela remoção de observações.
+Esse resultado confirma que a codificação temporal ajuda a GRU a interpretar
+janelas irregulares. No modelo base, remover linhas altera os intervalos reais
+entre observações, mas o decodificador não recebe essa informação. No modelo
+temporal, tanto o contexto passado quanto o horizonte futuro carregam posições
+relativas, o que reduz a degradação quando há dados faltantes.
+
+\section{Resultados probabilísticos da IQN}
+
+A IQN foi avaliada nos cenários I--L. A mediana $q50$ foi usada como previsão
+pontual e os intervalos $q10$--$q90$ e $q05$--$q95$ foram usados para avaliar
+cobertura. A Tabela~\ref{tab:iqn} resume as métricas probabilísticas e as
+larguras médias dos intervalos.
+
+\begin{table}[H]
+\centering
+\caption{Métricas probabilísticas dos cenários IQN.}
+\label{tab:iqn}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\hline
+Cenario & Missing & QLoss & RMSE q50 & MAE q50 & Cob80 & Cob90 & Largura 80/90 \\
+\hline
+I & 0.0 & 0.0304 & 0.1611 & 0.1250 & 0.7680 & 0.8759 & 0.3872 / 0.5067 \\
+J & 0.1 & 0.0299 & 0.1577 & 0.1240 & 0.7283 & 0.8564 & 0.3474 / 0.4590 \\
+K & 0.3 & 0.0387 & 0.2058 & 0.1634 & 0.7867 & 0.8936 & 0.5111 / 0.6648 \\
+L & 0.5 & 0.0343 & 0.1800 & 0.1426 & 0.7136 & 0.8396 & 0.3876 / 0.5028 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cobertura_iqn.png}
+    \caption*{Cobertura nominal versus cobertura empírica.}
+\end{minipage}
+\begin{minipage}{0.49\textwidth}
+    \centering
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/largura_intervalos_iqn.png}
+    \caption*{Largura média dos intervalos por \textit{missing}.}
+\end{minipage}
+\caption{Avaliação dos intervalos probabilísticos produzidos pela IQN.}
+\label{fig:iqn-cobertura}
+\end{figure}
+
+As coberturas ficaram ligeiramente abaixo dos valores nominais na maioria dos
+cenários, indicando intervalos um pouco estreitos. Mesmo assim, os resultados
+mostram calibração razoável: o intervalo nominal de $80\%$ cobriu entre
+$71\%$ e $79\%$ dos pontos, enquanto o intervalo nominal de $90\%$ cobriu entre
+$84\%$ e $89\%$. A maior largura ocorreu no cenário K, com \textit{missing}
+$0{,}3$, que também foi o cenário IQN com maior RMSE da mediana. Isso sugere
+que a IQN aumentou a incerteza justamente em uma configuração mais difícil.
+
+Comparando a mediana da IQN ao GRU temporal determinístico, a IQN reduziu o RMSE
+nos cenários sem remoção, com \textit{missing} $0{,}1$ e com \textit{missing}
+$0{,}5$. No cenário com \textit{missing} $0{,}3$, a mediana da IQN teve RMSE
+maior que o GRU temporal determinístico, mas ainda produziu intervalos de
+incerteza com cobertura próxima dos valores nominais.
 
 \section{Curvas de treinamento}
 
 As curvas de loss indicam que os cenários atingem seus melhores checkpoints em
 épocas distintas. Por isso, o treinamento foi interrompido quando a loss de teste
-ficou $50$ épocas sem melhora. A Tabela~\ref{tab:resultados} reporta o checkpoint
-restaurado da melhor época, não necessariamente o último estado produzido antes
-da parada.
+ficou $50$ épocas sem melhora. Na IQN, as curvas representam quantile loss, e
+não MSE, o que torna a comparação direta de loss com os cenários determinísticos
+menos apropriada.
 
 \begin{figure}[H]
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_B_GRU_base_missing_0p1_loss.png}
     \caption*{Cenário B: GRU base, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_F_GRU_temporal_missing_0p1_loss.png}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_F_GRU_temporal_missing_0p1_loss.png}
     \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
 \end{minipage}
 
@@ -327,13 +420,13 @@ da parada.
 
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_D_GRU_base_missing_0p5_loss.png}
-    \caption*{Cenário D: GRU base, missing $0{,}5$.}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_J_GRU_temporal_IQN_missing_0p1_loss.png}
+    \caption*{Cenário J: GRU temporal IQN, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_H_GRU_temporal_missing_0p5_loss.png}
-    \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_K_GRU_temporal_IQN_missing_0p3_loss.png}
+    \caption*{Cenário K: GRU temporal IQN, missing $0{,}3$.}
 \end{minipage}
 \caption{Curvas de loss de treino e teste para cenários representativos.}
 \label{fig:losses}
@@ -342,21 +435,20 @@ da parada.
 \section{Exemplos de previsão}
 
 A Figura~\ref{fig:forecasts} mostra exemplos de previsão em janelas de teste
-representativas. Os gráficos de previsão usam o eixo horizontal como passo
-futuro da janela escolhida, não como época de treinamento. Como os cenários com
-dados faltantes removem observações antes da criação das janelas, o número de
-pontos válidos pode ser menor que o horizonte nominal completo.
+representativas. Nos cenários determinísticos, o gráfico mostra a previsão
+pontual. Nos cenários IQN, o gráfico mostra a mediana $q50$ e bandas de
+incerteza $q10$--$q90$ e $q05$--$q95$.
 
 \begin{figure}[H]
 \centering
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_B_GRU_base_missing_0p1_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_B_GRU_base_missing_0p1_forecast.png}
     \caption*{Cenário B: GRU base, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_F_GRU_temporal_missing_0p1_forecast.png}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_F_GRU_temporal_missing_0p1_forecast.png}
     \caption*{Cenário F: GRU temporal, missing $0{,}1$.}
 \end{minipage}
 
@@ -364,13 +456,13 @@ pontos válidos pode ser menor que o horizonte nominal completo.
 
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_D_GRU_base_missing_0p5_forecast.png}
-    \caption*{Cenário D: GRU base, missing $0{,}5$.}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_J_GRU_temporal_IQN_missing_0p1_forecast.png}
+    \caption*{Cenário J: IQN, missing $0{,}1$.}
 \end{minipage}
 \begin{minipage}{0.49\textwidth}
     \centering
-    \imagemsegura[width=\textwidth]{reports_early_stop_ddp_bs1024/cenario_H_GRU_temporal_missing_0p5_forecast.png}
-    \caption*{Cenário H: GRU temporal, missing $0{,}5$.}
+    \imagemsegura[width=\textwidth]{reports_iqn_temporal/cenario_L_GRU_temporal_IQN_missing_0p5_forecast.png}
+    \caption*{Cenário L: IQN, missing $0{,}5$.}
 \end{minipage}
 \caption{Exemplos de previsão no conjunto de teste.}
 \label{fig:forecasts}
@@ -385,35 +477,40 @@ o instante relativo de cada observação passada e de cada passo futuro. Quando 
 série fica irregular por remoção de linhas, essa informação ajuda a GRU a
 interpretar intervalos temporais que deixam de ser uniformes.
 
-No GRU base, o cenário com \textit{missing} $0{,}3$ apresentou RMSE maior que o
-cenário com \textit{missing} $0{,}5$, mostrando que a degradação não foi
-estritamente monotônica após a seleção do melhor checkpoint. Mesmo assim, o GRU
-temporal manteve menor erro absoluto em todos os pares comparáveis. No modelo
-temporal, a variação de RMSE entre os cenários E e H foi pequena, reforçando a
-hipótese de que a codificação temporal melhora a robustez.
+A implementação da IQN complementou o pipeline ao transformar a previsão pontual
+em previsão probabilística. A maior dificuldade prática foi que a cabeça IQN
+multiplica o custo computacional: no treino são geradas $8$ amostras por ponto
+futuro e, na avaliação, $100$ amostras por ponto futuro. Além disso, no
+treinamento distribuído foi necessário remover a cabeça linear determinística
+dos modelos IQN para evitar parâmetros não utilizados no DDP. Após esse ajuste,
+os cenários I--L executaram corretamente.
 
 Uma limitação importante do protocolo é que o \textit{early stopping} monitorou
 a loss do conjunto de teste, pois este era o particionamento disponível no
 pipeline experimental. Em um protocolo mais rigoroso, uma fração do treino
 deveria ser separada como validação, reservando o teste apenas para a avaliação
-final.
+final. Outra limitação é que as coberturas da IQN ficaram levemente abaixo dos
+níveis nominais, sugerindo que uma calibração posterior ou um ajuste de
+hiperparâmetros poderia melhorar a largura dos intervalos.
 
 \section{Conclusão}
 
 A comparação experimental indica que o GRU com codificação temporal é superior
-ao GRU base nos oito cenários avaliados. O ganho é mais expressivo nos cenários
-com maior proporção de dados faltantes: com \textit{missing} $0{,}3$, o RMSE do
-GRU temporal foi $0{,}1697$, contra $0{,}2888$ do GRU base; com
-\textit{missing} $0{,}5$, foi $0{,}1818$, contra $0{,}2637$. Portanto, a
-concatenação de uma representação temporal sinusoidal ao SSH, aliada ao uso de
-informação temporal futura no decodificador, mostrou-se uma estratégia eficaz
-para previsão de SSH em séries irregulares.
+ao GRU base nos oito cenários determinísticos avaliados. O ganho é mais
+expressivo nos cenários com maior proporção de dados faltantes: com
+\textit{missing} $0{,}3$, o RMSE do GRU temporal foi $0{,}1697$, contra
+$0{,}2888$ do GRU base; com \textit{missing} $0{,}5$, foi $0{,}1818$, contra
+$0{,}2637$. Portanto, a concatenação de uma representação temporal sinusoidal ao
+SSH, aliada ao uso de informação temporal futura no decodificador, mostrou-se
+uma estratégia eficaz para previsão de SSH em séries irregulares.
 
-Como trabalhos futuros, recomenda-se integrar a abordagem probabilística por
-IQN-RNN proposta por Gouttes et al. \cite{gouttes2021}, permitindo gerar
-quantis, bandas de incerteza e métricas de cobertura. Essa extensão complementa
-a previsão pontual avaliada aqui e atende ao objetivo de estimar não apenas o
-valor esperado da série, mas também a incerteza associada à previsão.
+A IQN atendeu ao objetivo probabilístico do trabalho, pois produziu quantis,
+bandas de incerteza e métricas de cobertura. A mediana da IQN alcançou RMSE
+competitivo e, em três dos quatro níveis de \textit{missing}, foi menor ou muito
+próxima ao RMSE do GRU temporal determinístico. As coberturas empíricas ficaram
+próximas, mas ligeiramente abaixo, das coberturas nominais, indicando que o
+modelo captura a incerteza principal da série, embora ainda possa ser calibrado
+para intervalos mais conservadores.
 
 % =========================
 % Referências

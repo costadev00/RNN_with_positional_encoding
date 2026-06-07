@@ -23,6 +23,10 @@ from PCS5024_EP_Time_Series import (
     DEFAULT_DATA_FILENAME,
     DEFAULT_FUTURE_LEN,
     DEFAULT_HIDDEN_SIZE,
+    DEFAULT_IQN_EVAL_SAMPLES,
+    DEFAULT_IQN_QUANTILES,
+    DEFAULT_IQN_TAU_EMBEDDING_DIM,
+    DEFAULT_IQN_TRAIN_SAMPLES,
     DEFAULT_LEARNING_RATE,
     DEFAULT_NUM_EPOCHS,
     DEFAULT_NUM_WORKERS,
@@ -36,6 +40,13 @@ from PCS5024_EP_Time_Series import (
 )
 
 
+class HelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawDescriptionHelpFormatter,
+):
+    pass
+
+
 @dataclass(frozen=True)
 class Scenario:
     code: str
@@ -45,11 +56,21 @@ class Scenario:
 
     @property
     def model_label(self) -> str:
-        return "GRU base" if self.model_variant == "gru_base" else "GRU temporal"
+        labels = {
+            "gru_base": "GRU base",
+            "gru_temporal": "GRU temporal",
+            "gru_temporal_iqn": "GRU temporal IQN",
+        }
+        return labels[self.model_variant]
 
     @property
     def slug(self) -> str:
-        model_part = "GRU_base" if self.model_variant == "gru_base" else "GRU_temporal"
+        model_parts = {
+            "gru_base": "GRU_base",
+            "gru_temporal": "GRU_temporal",
+            "gru_temporal_iqn": "GRU_temporal_IQN",
+        }
+        model_part = model_parts[self.model_variant]
         missing_part = f"{self.missing_ratio:.1f}".replace(".", "p")
         return f"cenario_{self.code}_{model_part}_missing_{missing_part}"
 
@@ -63,6 +84,10 @@ SCENARIOS = [
     Scenario("F", "gru_temporal", 0.1, "robustez"),
     Scenario("G", "gru_temporal", 0.3, "recuperacao principal"),
     Scenario("H", "gru_temporal", 0.5, "robustez severa"),
+    Scenario("I", "gru_temporal_iqn", 0.0, "IQN controle"),
+    Scenario("J", "gru_temporal_iqn", 0.1, "IQN robustez"),
+    Scenario("K", "gru_temporal_iqn", 0.3, "IQN recuperacao principal"),
+    Scenario("L", "gru_temporal_iqn", 0.5, "IQN robustez severa"),
 ]
 
 
@@ -159,6 +184,14 @@ def build_command(
         str(args.pos_encoding_dim),
         "--time_scale",
         str(args.time_scale),
+        "--iqn_train_samples",
+        str(args.iqn_train_samples),
+        "--iqn_eval_samples",
+        str(args.iqn_eval_samples),
+        "--iqn_tau_embedding_dim",
+        str(args.iqn_tau_embedding_dim),
+        "--iqn_quantiles",
+        args.iqn_quantiles,
         "--seed",
         str(args.seed),
     ]
@@ -232,7 +265,10 @@ def load_metrics(reports_dir: pathlib.Path) -> list[dict[str, object]]:
     rows = []
     scenario_by_code = {scenario.code: scenario for scenario in SCENARIOS}
     for scenario in SCENARIOS:
-        with metric_path(reports_dir, scenario).open() as json_file:
+        path = metric_path(reports_dir, scenario)
+        if not path.exists():
+            continue
+        with path.open() as json_file:
             metrics = json.load(json_file)
         metrics["scenario"] = scenario.code
         metrics["model_label"] = scenario.model_label
@@ -240,6 +276,8 @@ def load_metrics(reports_dir: pathlib.Path) -> list[dict[str, object]]:
         metrics["missing_ratio"] = scenario.missing_ratio
         metrics["slug"] = scenario.slug
         rows.append(metrics)
+    if not rows:
+        raise FileNotFoundError(f"No scenario metrics found in {reports_dir}.")
     return rows
 
 
@@ -264,11 +302,23 @@ def write_summary_csv(rows: list[dict[str, object]], output_path: pathlib.Path) 
         "rmse",
         "mae",
         "bias",
+        "quantile_loss",
+        "median_mse",
+        "median_rmse",
+        "median_mae",
+        "coverage_80",
+        "coverage_90",
+        "interval_width_80",
+        "interval_width_90",
+        "iqn_train_samples",
+        "iqn_eval_samples",
+        "iqn_tau_embedding_dim",
+        "iqn_quantiles",
         "num_windows",
         "num_points",
     ]
     with output_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
@@ -291,11 +341,24 @@ def latex_escape(value: object) -> str:
     return text
 
 
+def format_optional_float(row: dict[str, object], field: str, digits: int = 4) -> str:
+    value = row.get(field, "")
+    if value == "" or value is None:
+        return ""
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def write_latex_table(rows: list[dict[str, object]], output_path: pathlib.Path) -> None:
     lines = [
-        r"\begin{tabular}{lllllrrrr}",
+        r"\begin{tabular}{lllllrrrrrrr}",
         r"\hline",
-        r"Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE \\",
+        (
+            r"Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & "
+            r"MSE & RMSE & MAE & QLoss & Cob80 & Cob90 \\"
+        ),
         r"\hline",
     ]
     for row in rows:
@@ -312,6 +375,9 @@ def write_latex_table(rows: list[dict[str, object]], output_path: pathlib.Path) 
                     f"{float(row['mse']):.4f}",
                     f"{float(row['rmse']):.4f}",
                     f"{float(row['mae']):.4f}",
+                    format_optional_float(row, "quantile_loss"),
+                    format_optional_float(row, "coverage_80"),
+                    format_optional_float(row, "coverage_90"),
                 ]
             )
             + r" \\"
@@ -337,8 +403,23 @@ def load_history(reports_dir: pathlib.Path, scenario: Scenario) -> pl.DataFrame:
     return pl.read_csv(history_path(reports_dir, scenario))
 
 
+def scenarios_with_history(reports_dir: pathlib.Path) -> list[Scenario]:
+    return [scenario for scenario in SCENARIOS if history_path(reports_dir, scenario).exists()]
+
+
+def scenarios_with_predictions(reports_dir: pathlib.Path) -> list[Scenario]:
+    return [
+        scenario
+        for scenario in SCENARIOS
+        if predictions_path(reports_dir, scenario).exists()
+    ]
+
+
 def plot_standardized_losses(reports_dir: pathlib.Path) -> None:
-    histories = {scenario.code: load_history(reports_dir, scenario) for scenario in SCENARIOS}
+    scenarios = scenarios_with_history(reports_dir)
+    if not scenarios:
+        return
+    histories = {scenario.code: load_history(reports_dir, scenario) for scenario in scenarios}
     max_epoch = max(int(history["epoch"].max()) for history in histories.values())
     x_high = max(2, max_epoch)
     loss_values = []
@@ -347,7 +428,7 @@ def plot_standardized_losses(reports_dir: pathlib.Path) -> None:
         loss_values.extend(history["test_loss"].to_list())
     y_limits = padded_limits([float(value) for value in loss_values])
 
-    for scenario in SCENARIOS:
+    for scenario in scenarios:
         history = histories[scenario.code]
         fig, ax = plt.subplots(figsize=(10, 5.5))
         ax.plot(history["epoch"], history["train_loss"], label="Treino", linewidth=2)
@@ -355,7 +436,7 @@ def plot_standardized_losses(reports_dir: pathlib.Path) -> None:
         ax.set_xlim(1, x_high)
         ax.set_ylim(*y_limits)
         ax.set_xlabel("Epoca")
-        ax.set_ylabel("Loss normalizada (MSE)")
+        ax.set_ylabel("Loss normalizada")
         ax.set_title(
             f"Cenario {scenario.code}: {scenario.model_label}, "
             f"missing={scenario.missing_ratio:.1f}"
@@ -369,7 +450,7 @@ def plot_standardized_losses(reports_dir: pathlib.Path) -> None:
 
 def selected_prediction_windows(reports_dir: pathlib.Path) -> dict[str, pl.DataFrame]:
     windows = {}
-    for scenario in SCENARIOS:
+    for scenario in scenarios_with_predictions(reports_dir):
         predictions = pl.read_csv(predictions_path(reports_dir, scenario))
         selected_window = int(predictions["window_id"].max()) // 2
         window_df = predictions.filter(pl.col("window_id") == selected_window)
@@ -381,18 +462,39 @@ def selected_prediction_windows(reports_dir: pathlib.Path) -> dict[str, pl.DataF
 
 def plot_standardized_forecasts(reports_dir: pathlib.Path) -> None:
     windows = selected_prediction_windows(reports_dir)
+    if not windows:
+        return
     max_step = max(int(window["step"].max()) for window in windows.values())
     y_values = []
     for window in windows.values():
         y_values.extend(window["Y"].to_list())
         y_values.extend(window["Y_hat"].to_list())
+        for quantile_column in ["q05", "q10", "q50", "q90", "q95"]:
+            if quantile_column in window.columns:
+                y_values.extend(window[quantile_column].to_list())
     y_limits = padded_limits([float(value) for value in y_values])
 
-    for scenario in SCENARIOS:
+    for scenario in scenarios_with_predictions(reports_dir):
         window = windows[scenario.code]
         fig, ax = plt.subplots(figsize=(10, 5.5))
+        if {"q05", "q10", "q90", "q95"}.issubset(set(window.columns)):
+            ax.fill_between(
+                window["step"].to_numpy(),
+                window["q05"].to_numpy(),
+                window["q95"].to_numpy(),
+                alpha=0.18,
+                label="q05-q95",
+            )
+            ax.fill_between(
+                window["step"].to_numpy(),
+                window["q10"].to_numpy(),
+                window["q90"].to_numpy(),
+                alpha=0.28,
+                label="q10-q90",
+            )
         ax.plot(window["step"], window["Y"], label="Observado", linewidth=2)
-        ax.plot(window["step"], window["Y_hat"], label="Previsto", linewidth=2)
+        prediction_label = "q50" if "q50" in window.columns else "Previsto"
+        ax.plot(window["step"], window["Y_hat"], label=prediction_label, linewidth=2)
         ax.set_xlim(0, max_step)
         ax.set_ylim(*y_limits)
         ax.set_xlabel("Passo futuro")
@@ -410,8 +512,10 @@ def plot_standardized_forecasts(reports_dir: pathlib.Path) -> None:
 
 def plot_metric_comparison(rows: list[dict[str, object]], reports_dir: pathlib.Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5.2), sharex=True)
-    for model_label in ["GRU base", "GRU temporal"]:
+    for model_label in ["GRU base", "GRU temporal", "GRU temporal IQN"]:
         model_rows = [row for row in rows if row["model_label"] == model_label]
+        if not model_rows:
+            continue
         model_rows = sorted(model_rows, key=lambda row: float(row["missing_ratio"]))
         x = [float(row["missing_ratio"]) for row in model_rows]
         rmse = [float(row["rmse"]) for row in model_rows]
@@ -433,6 +537,67 @@ def plot_metric_comparison(rows: list[dict[str, object]], reports_dir: pathlib.P
     plt.close(fig)
 
 
+def plot_iqn_coverage(rows: list[dict[str, object]], reports_dir: pathlib.Path) -> None:
+    iqn_rows = [
+        row
+        for row in rows
+        if row.get("coverage_80") not in ("", None)
+        and row.get("coverage_90") not in ("", None)
+    ]
+    if not iqn_rows:
+        return
+
+    iqn_rows = sorted(iqn_rows, key=lambda row: float(row["missing_ratio"]))
+    x = [float(row["missing_ratio"]) for row in iqn_rows]
+    coverage_80 = [float(row["coverage_80"]) for row in iqn_rows]
+    coverage_90 = [float(row["coverage_90"]) for row in iqn_rows]
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.2))
+    ax.plot(x, coverage_80, marker="o", linewidth=2, label="Empirica q10-q90")
+    ax.plot(x, coverage_90, marker="o", linewidth=2, label="Empirica q05-q95")
+    ax.axhline(0.80, color="0.35", linestyle="--", linewidth=1.5, label="Nominal 80%")
+    ax.axhline(0.90, color="0.55", linestyle=":", linewidth=1.8, label="Nominal 90%")
+    ax.set_xlabel("Missing ratio")
+    ax.set_ylabel("Cobertura")
+    ax.set_title("Cobertura empirica da IQN")
+    ax.set_xticks([0.0, 0.1, 0.3, 0.5])
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, alpha=0.35)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(reports_dir / "cobertura_iqn.png", dpi=170)
+    plt.close(fig)
+
+
+def plot_iqn_interval_width(rows: list[dict[str, object]], reports_dir: pathlib.Path) -> None:
+    iqn_rows = [
+        row
+        for row in rows
+        if row.get("interval_width_80") not in ("", None)
+        and row.get("interval_width_90") not in ("", None)
+    ]
+    if not iqn_rows:
+        return
+
+    iqn_rows = sorted(iqn_rows, key=lambda row: float(row["missing_ratio"]))
+    x = [float(row["missing_ratio"]) for row in iqn_rows]
+    width_80 = [float(row["interval_width_80"]) for row in iqn_rows]
+    width_90 = [float(row["interval_width_90"]) for row in iqn_rows]
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.2))
+    ax.plot(x, width_80, marker="o", linewidth=2, label="Largura q10-q90")
+    ax.plot(x, width_90, marker="o", linewidth=2, label="Largura q05-q95")
+    ax.set_xlabel("Missing ratio")
+    ax.set_ylabel("Largura media")
+    ax.set_title("Largura media dos intervalos IQN")
+    ax.set_xticks([0.0, 0.1, 0.3, 0.5])
+    ax.grid(True, alpha=0.35)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(reports_dir / "largura_intervalos_iqn.png", dpi=170)
+    plt.close(fig)
+
+
 def regenerate_reports(reports_dir: pathlib.Path) -> None:
     rows = load_metrics(reports_dir)
     write_summary_csv(rows, reports_dir / "resumo_resultados.csv")
@@ -440,38 +605,90 @@ def regenerate_reports(reports_dir: pathlib.Path) -> None:
     plot_standardized_losses(reports_dir)
     plot_standardized_forecasts(reports_dir)
     plot_metric_comparison(rows, reports_dir)
+    plot_iqn_coverage(rows, reports_dir)
+    plot_iqn_interval_width(rows, reports_dir)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the eight comparative GRU scenarios and generate reports."
+        description=(
+            "Run the final PCS5024 experiment: scenarios A-L comparing GRU base, "
+            "GRU temporal, and GRU temporal IQN."
+        ),
+        formatter_class=HelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  Full 4-GPU run:\n"
+            "    python run_reports.py --ddp --effective_batch_size 1024 "
+            "--early_stopping_patience 50 --early_stopping_min_delta 0.0\n\n"
+            "  Regenerate tables and plots from existing lightweight artifacts:\n"
+            "    python run_reports.py --skip_training\n\n"
+            "  CPU/debug run:\n"
+            "    python run_reports.py --cpu --num_epochs 1 --hidden_size 16 "
+            "--batch_size 32 --iqn_train_samples 2 --iqn_eval_samples 8"
+        ),
     )
-    parser.add_argument("--reports_dir", default="reports")
-    parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--force", action="store_true")
-    parser.add_argument("--skip_training", action="store_true")
-    parser.add_argument("--cpu", action="store_true")
-    parser.add_argument("--ddp", action="store_true")
-    parser.add_argument("--nproc_per_node", "--nproc-per-node", type=int, default=0)
-    parser.add_argument("--effective_batch_size", "--effective-batch-size", type=int, default=0)
-    parser.add_argument("--max_parallel", type=int, default=0)
-    parser.add_argument("--torch_threads", type=int, default=8)
-    parser.add_argument("--data_filename", default=DEFAULT_DATA_FILENAME)
-    parser.add_argument("--split_date", default=DEFAULT_TRAIN_TEST_SPLIT_DATE)
-    parser.add_argument("--past_len", type=int, default=DEFAULT_PAST_LEN)
-    parser.add_argument("--future_len", type=int, default=DEFAULT_FUTURE_LEN)
-    parser.add_argument("--sliding_window_step", type=int, default=DEFAULT_SLIDING_WINDOW_STEP)
-    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--num_workers", type=int, default=DEFAULT_NUM_WORKERS)
-    parser.add_argument("--hidden_size", type=int, default=DEFAULT_HIDDEN_SIZE)
-    parser.add_argument("--num_epochs", type=int, default=DEFAULT_NUM_EPOCHS)
-    parser.add_argument("--learning_rate", type=float, default=DEFAULT_LEARNING_RATE)
-    parser.add_argument("--weight_decay", type=float, default=DEFAULT_WEIGHT_DECAY)
-    parser.add_argument("--early_stopping_patience", type=int, default=0)
-    parser.add_argument("--early_stopping_min_delta", type=float, default=0.0)
-    parser.add_argument("--pos_encoding_dim", type=int, default=DEFAULT_POS_ENCODING_DIM)
-    parser.add_argument("--time_scale", type=float, default=DEFAULT_TIME_SCALE)
-    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--reports_dir",
+        default="reports_iqn_temporal",
+        help="Directory used for final metrics, histories, figures, and tables.",
+    )
+    parser.add_argument("--python", default=sys.executable, help="Python executable used to launch scenario training.")
+    parser.add_argument("--force", action="store_true", help="Retrain scenarios even if full outputs already exist.")
+    parser.add_argument("--skip_training", action="store_true", help="Only regenerate summary tables and plots from existing artifacts.")
+    parser.add_argument("--cpu", action="store_true", help="Disable CUDA and run on CPU.")
+    parser.add_argument("--ddp", action="store_true", help="Use torch DistributedDataParallel for each scenario.")
+    parser.add_argument(
+        "--nproc_per_node",
+        "--nproc-per-node",
+        type=int,
+        default=0,
+        help="Number of DDP processes. Use 0 to auto-detect all CUDA GPUs.",
+    )
+    parser.add_argument(
+        "--effective_batch_size",
+        "--effective-batch-size",
+        type=int,
+        default=0,
+        help="Desired global batch size for DDP. When set, per-process batch size is derived automatically.",
+    )
+    parser.add_argument(
+        "--max_parallel",
+        type=int,
+        default=0,
+        help="How many non-DDP scenarios to run concurrently. Use 0 for an automatic value.",
+    )
+    parser.add_argument("--torch_threads", type=int, default=8, help="CPU threads passed to the training script.")
+    parser.add_argument("--data_filename", default=DEFAULT_DATA_FILENAME, help="Input SSH CSV file.")
+    parser.add_argument("--split_date", default=DEFAULT_TRAIN_TEST_SPLIT_DATE, help="Train/test split timestamp.")
+    parser.add_argument("--past_len", type=int, default=DEFAULT_PAST_LEN, help="Past context horizon, in timestamp units.")
+    parser.add_argument("--future_len", type=int, default=DEFAULT_FUTURE_LEN, help="Forecast horizon, in timestamp units.")
+    parser.add_argument(
+        "--sliding_window_step",
+        type=int,
+        default=DEFAULT_SLIDING_WINDOW_STEP,
+        help="Sliding-window stride. Smaller values create more training windows.",
+    )
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size per process.")
+    parser.add_argument("--num_workers", type=int, default=DEFAULT_NUM_WORKERS, help="DataLoader workers.")
+    parser.add_argument("--hidden_size", type=int, default=DEFAULT_HIDDEN_SIZE, help="GRU hidden size.")
+    parser.add_argument("--num_epochs", type=int, default=DEFAULT_NUM_EPOCHS, help="Maximum training epochs.")
+    parser.add_argument("--learning_rate", type=float, default=DEFAULT_LEARNING_RATE, help="Adam learning rate.")
+    parser.add_argument("--weight_decay", type=float, default=DEFAULT_WEIGHT_DECAY, help="Adam weight decay.")
+    parser.add_argument("--early_stopping_patience", type=int, default=0, help="Epochs without test-loss improvement before stopping. Use 0 to disable.")
+    parser.add_argument("--early_stopping_min_delta", type=float, default=0.0, help="Minimum test-loss reduction required to count as an improvement.")
+    parser.add_argument("--pos_encoding_dim", type=int, default=DEFAULT_POS_ENCODING_DIM, help="Sinusoidal temporal encoding dimension.")
+    parser.add_argument("--time_scale", type=float, default=DEFAULT_TIME_SCALE, help="Scale applied to relative timestamps before temporal encoding.")
+    parser.add_argument("--iqn_train_samples", type=int, default=DEFAULT_IQN_TRAIN_SAMPLES, help="Tau samples per valid target point during IQN training.")
+    parser.add_argument("--iqn_eval_samples", type=int, default=DEFAULT_IQN_EVAL_SAMPLES, help="Deterministic tau samples per point during IQN evaluation.")
+    parser.add_argument(
+        "--iqn_tau_embedding_dim",
+        type=int,
+        default=DEFAULT_IQN_TAU_EMBEDDING_DIM,
+        help="Cosine basis size for the IQN tau embedding.",
+    )
+    parser.add_argument("--iqn_quantiles", default=DEFAULT_IQN_QUANTILES, help="Comma-separated quantiles exported for IQN scenarios.")
+    parser.add_argument("--seed", type=int, default=SEED, help="Random seed for all scenarios.")
     args = parser.parse_args()
     if args.early_stopping_patience < 0:
         parser.error("--early_stopping_patience must be >= 0.")
@@ -481,6 +698,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--nproc_per_node must be >= 0.")
     if args.effective_batch_size < 0:
         parser.error("--effective_batch_size must be >= 0.")
+    if args.iqn_train_samples <= 0:
+        parser.error("--iqn_train_samples must be > 0.")
+    if args.iqn_eval_samples <= 0:
+        parser.error("--iqn_eval_samples must be > 0.")
+    if args.iqn_tau_embedding_dim <= 0:
+        parser.error("--iqn_tau_embedding_dim must be > 0.")
     if args.ddp and args.cpu:
         parser.error("--ddp cannot be combined with --cpu.")
     return args

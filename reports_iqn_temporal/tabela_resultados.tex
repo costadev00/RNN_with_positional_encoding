@@ -1,0 +1,18 @@
+\begin{tabular}{lllllrrrrrrr}
+\hline
+Cenario & Modelo & Missing & Epocas & Objetivo & Loss teste & MSE & RMSE & MAE & QLoss & Cob80 & Cob90 \\
+\hline
+A & GRU base & 0.0 & 337 & baseline ideal & 0.3565 & 0.0583 & 0.2415 & 0.1970 &  &  &  \\
+B & GRU base & 0.1 & 196 & robustez & 0.4006 & 0.0660 & 0.2569 & 0.2064 &  &  &  \\
+C & GRU base & 0.3 & 140 & degradacao principal & 0.5017 & 0.0834 & 0.2888 & 0.2295 &  &  &  \\
+D & GRU base & 0.5 & 334 & degradacao severa & 0.4769 & 0.0696 & 0.2637 & 0.2120 &  &  &  \\
+E & GRU temporal & 0.0 & 340 & controle & 0.2150 & 0.0355 & 0.1884 & 0.1496 &  &  &  \\
+F & GRU temporal & 0.1 & 756 & robustez & 0.1902 & 0.0312 & 0.1767 & 0.1389 &  &  &  \\
+G & GRU temporal & 0.3 & 664 & recuperacao principal & 0.1750 & 0.0288 & 0.1697 & 0.1328 &  &  &  \\
+H & GRU temporal & 0.5 & 630 & robustez severa & 0.2110 & 0.0331 & 0.1818 & 0.1445 &  &  &  \\
+I & GRU temporal IQN & 0.0 & 869 & IQN controle & 0.1093 & 0.0259 & 0.1611 & 0.1250 & 0.0304 & 0.7680 & 0.8759 \\
+J & GRU temporal IQN & 0.1 & 976 & IQN robustez & 0.1095 & 0.0249 & 0.1577 & 0.1240 & 0.0299 & 0.7283 & 0.8564 \\
+K & GRU temporal IQN & 0.3 & 342 & IQN recuperacao principal & 0.1408 & 0.0423 & 0.2058 & 0.1634 & 0.0387 & 0.7867 & 0.8936 \\
+L & GRU temporal IQN & 0.5 & 590 & IQN robustez severa & 0.1292 & 0.0324 & 0.1800 & 0.1426 & 0.0343 & 0.7136 & 0.8396 \\
+\hline
+\end{tabular}

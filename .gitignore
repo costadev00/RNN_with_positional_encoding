@@ -1,3 +1,38 @@
-.vscode
-.venv
-__pycache__
+# Ambientes locais
+.venv/
+.vscode/
+
+# Caches Python e ferramentas
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Artefatos pesados/regeneraveis de treino
+*.pth
+*_predictions.csv
+*_train.log
+*_loss_raw.png
+results/
+
+# Reports gerados por padrao
+reports/
+reports_*/
+
+# Excecao: artefatos finais leves usados no relatorio
+!reports_iqn_temporal/
+reports_iqn_temporal/*
+!reports_iqn_temporal/*_metrics.json
+!reports_iqn_temporal/*_history.csv
+!reports_iqn_temporal/*_forecast.png
+!reports_iqn_temporal/*_loss.png
+!reports_iqn_temporal/comparativo_rmse_mae.png
+!reports_iqn_temporal/cobertura_iqn.png
+!reports_iqn_temporal/largura_intervalos_iqn.png
+!reports_iqn_temporal/resumo_resultados.csv
+!reports_iqn_temporal/tabela_resultados.tex
+
+# O PDF final e gerado fora do Git a partir de relatorio.tex
+relatorio.pdf

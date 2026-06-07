@@ -74,6 +74,10 @@ DATA_REMOVAL_RATIO = 0
 
 DEFAULT_POS_ENCODING_DIM = 128
 DEFAULT_TIME_SCALE = 1.0
+DEFAULT_IQN_TRAIN_SAMPLES = 8
+DEFAULT_IQN_EVAL_SAMPLES = 100
+DEFAULT_IQN_TAU_EMBEDDING_DIM = 64
+DEFAULT_IQN_QUANTILES = "0.05,0.10,0.50,0.90,0.95"
 
 SEED = 100
 torch.manual_seed(SEED)
@@ -157,6 +161,8 @@ class EvaluationResult:
     predictions: list[np.ndarray]
     targets: list[np.ndarray]
     target_timestamps: list[np.ndarray]
+    quantile_predictions: dict[str, list[np.ndarray]] | None = None
+    quantile_levels: list[float] | None = None
 
 
 @dataclass(slots=True)
@@ -519,6 +525,51 @@ def sinusoidal_positional_encoding(
 
 
 # --- Model Definition ---
+class IQNHead(nn.Module):
+    """Implicit Quantile Network head conditioned on decoder hidden states."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        input_size: int,
+        tau_embedding_dim: int = DEFAULT_IQN_TAU_EMBEDDING_DIM,
+    ):
+        super().__init__()
+        self.tau_embedding_dim = tau_embedding_dim
+        self.tau_embedding = nn.Linear(tau_embedding_dim, hidden_size)
+        self.generator = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, input_size),
+        )
+
+    def forward(self, hidden_seq: torch.Tensor, taus: torch.Tensor) -> torch.Tensor:
+        """Generates quantile forecasts for each tau.
+
+        Args:
+            hidden_seq: Tensor with shape (batch, target_len, hidden_size).
+            taus: Tensor with shape (batch, target_len, num_samples).
+
+        Returns:
+            Tensor with shape (batch, target_len, num_samples, input_size).
+        """
+
+        if taus.dim() == 4 and taus.size(-1) == 1:
+            taus = taus.squeeze(-1)
+        if taus.dim() != 3:
+            raise ValueError("IQN taus must have shape (batch, target_len, num_samples).")
+
+        basis = torch.arange(
+            self.tau_embedding_dim,
+            device=taus.device,
+            dtype=taus.dtype,
+        )
+        cos_features = torch.cos(np.pi * taus.unsqueeze(-1) * basis)
+        phi = torch.relu(self.tau_embedding(cos_features))
+        conditioned_hidden = hidden_seq.unsqueeze(2) * (1.0 + phi)
+        return self.generator(conditioned_hidden)
+
+
 class ARModel(nn.Module):
     """Autoregressive RNN Model using GRU."""
 
@@ -529,6 +580,8 @@ class ARModel(nn.Module):
         pos_encoding_dim: int = DEFAULT_POS_ENCODING_DIM,
         time_scale: float = DEFAULT_TIME_SCALE,
         use_time_encoding: bool = True,
+        use_iqn: bool = False,
+        iqn_tau_embedding_dim: int = DEFAULT_IQN_TAU_EMBEDDING_DIM,
     ):
         super().__init__()
 
@@ -537,6 +590,7 @@ class ARModel(nn.Module):
         self.pos_encoding_dim = pos_encoding_dim
         self.time_scale = time_scale
         self.use_time_encoding = use_time_encoding
+        self.use_iqn = use_iqn
 
         encoder_input_size = (
             input_size + pos_encoding_dim if use_time_encoding else input_size
@@ -559,7 +613,16 @@ class ARModel(nn.Module):
             batch_first=True,
         )
 
-        self.linear = nn.Linear(hidden_size, input_size)
+        self.linear = None if use_iqn else nn.Linear(hidden_size, input_size)
+        self.iqn_head = (
+            IQNHead(
+                hidden_size=hidden_size,
+                input_size=input_size,
+                tau_embedding_dim=iqn_tau_embedding_dim,
+            )
+            if use_iqn
+            else None
+        )
     
     @staticmethod
     def _timestamps_to_2d(timestamps: torch.Tensor) -> torch.Tensor:
@@ -592,8 +655,8 @@ class ARModel(nn.Module):
         _, h_n = self.encoder(x_packed)  # h_n shape: (1, batch_size, hidden_size)
         return h_n
 
-    def decode(self, h_n: torch.Tensor, y_timestamps: torch.Tensor, y_lengths: torch.Tensor, origin_timestamp: torch.Tensor) -> torch.Tensor:
-        """Decodes the sequence autoregressively."""
+    def decode_hidden(self, h_n: torch.Tensor, y_timestamps: torch.Tensor, y_lengths: torch.Tensor, origin_timestamp: torch.Tensor) -> torch.Tensor:
+        """Decodes the future sequence into GRU hidden states."""
         
         max_target_length = y_timestamps.size(1)
 
@@ -638,13 +701,31 @@ class ARModel(nn.Module):
             total_length=max_target_length,
         )[0]
 
-        y_hat = self.linear(out)
+        return out
 
-        return y_hat
+    def decode(self, h_n: torch.Tensor, y_timestamps: torch.Tensor, y_lengths: torch.Tensor, origin_timestamp: torch.Tensor) -> torch.Tensor:
+        """Decodes the sequence and applies the deterministic output head."""
+
+        if self.linear is None:
+            raise RuntimeError("Deterministic decode is unavailable for IQN models.")
+
+        hidden_seq = self.decode_hidden(
+            h_n=h_n,
+            y_timestamps=y_timestamps,
+            y_lengths=y_lengths,
+            origin_timestamp=origin_timestamp,
+        )
+        return self.linear(hidden_seq)
 
     def forward(
-        self, x: torch.Tensor, x_timestamps: torch.Tensor, x_lengths: torch.Tensor, y_timestamps: torch.Tensor, y_lengths: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        x: torch.Tensor,
+        x_timestamps: torch.Tensor,
+        x_lengths: torch.Tensor,
+        y_timestamps: torch.Tensor,
+        y_lengths: torch.Tensor,
+        taus: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass: encode the past, decode the future."""
         
         y_timestamps_2d = self._timestamps_to_2d(y_timestamps)
@@ -658,16 +739,68 @@ class ARModel(nn.Module):
         origin_timestamp=origin_timestamp,
         )
         
-        output_seq = self.decode(h_n=h_n,
+        hidden_seq = self.decode_hidden(h_n=h_n,
         y_timestamps=y_timestamps,
         y_lengths=y_lengths,
         origin_timestamp=origin_timestamp,
         )
 
-        return output_seq
+        if self.use_iqn:
+            if taus is None:
+                raise ValueError("IQN forward requires sampled taus.")
+            if self.iqn_head is None:
+                raise RuntimeError("IQN head is not initialized.")
+            return self.iqn_head(hidden_seq, taus), taus
+
+        if self.linear is None:
+            raise RuntimeError("Deterministic output head is not initialized.")
+        return self.linear(hidden_seq)
 
 
 # --- Training and Evaluation ---
+
+
+def unwrap_model_if_needed(model: nn.Module) -> nn.Module:
+    """Returns the underlying model without requiring the later helper definition."""
+
+    return model.module if hasattr(model, "module") else model
+
+
+def model_uses_iqn(model: nn.Module) -> bool:
+    return bool(getattr(unwrap_model_if_needed(model), "use_iqn", False))
+
+
+def sample_iqn_taus(
+    batch_size: int,
+    target_length: int,
+    num_samples: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    return torch.rand(
+        batch_size,
+        target_length,
+        num_samples,
+        device=device,
+        dtype=dtype,
+    )
+
+
+def make_eval_iqn_taus(
+    batch_size: int,
+    target_length: int,
+    num_samples: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    base_taus = (
+        torch.arange(num_samples, device=device, dtype=dtype) + 0.5
+    ) / float(num_samples)
+    return base_taus.view(1, 1, num_samples).expand(
+        batch_size,
+        target_length,
+        num_samples,
+    )
 
 
 def run_train_epoch(
@@ -676,6 +809,7 @@ def run_train_epoch(
     optimizer: optim.Optimizer,
     criterion: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
     device: torch.device,
+    iqn_train_samples: int,
 ) -> float:
     model.train()
 
@@ -712,13 +846,30 @@ def run_train_epoch(
             input_lengths = input_lengths.to(device)
             target_lengths = target_lengths.to(device)
 
-        outputs = model(
-            inputs,
-            input_timestamps,
-            input_lengths,
-            target_timestamps,
-            target_lengths,
-        )
+        if model_uses_iqn(model):
+            taus = sample_iqn_taus(
+                batch_size=targets.size(0),
+                target_length=targets.size(1),
+                num_samples=iqn_train_samples,
+                device=targets.device,
+                dtype=targets.dtype,
+            )
+            outputs = model(
+                inputs,
+                input_timestamps,
+                input_lengths,
+                target_timestamps,
+                target_lengths,
+                taus,
+            )
+        else:
+            outputs = model(
+                inputs,
+                input_timestamps,
+                input_lengths,
+                target_timestamps,
+                target_lengths,
+            )
 
         loss = criterion(outputs, targets, target_lengths)  # LOSS COMPUTATION
 
@@ -740,14 +891,22 @@ def denormalize_batch(
     return batch * norm_std.cpu().numpy() + norm_mean.cpu().numpy()
 
 
+def quantile_label(level: float) -> str:
+    return f"q{int(round(level * 100)):02d}"
+
+
 def run_eval_epoch(
     model: ARModel,
     dataloader: DataLoader,
     criterion: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
     device: torch.device,
     norm_statistics: tuple[torch.Tensor, torch.Tensor],
+    iqn_eval_samples: int,
+    iqn_quantile_levels: list[float],
 ) -> EvaluationResult:
     model.eval()
+    use_iqn = model_uses_iqn(model)
+    quantile_labels = [quantile_label(level) for level in iqn_quantile_levels]
 
     progress_bar = tqdm(
         dataloader,
@@ -762,6 +921,9 @@ def run_eval_epoch(
     all_targets: list[np.ndarray] = []
     all_target_timestamps: list[np.ndarray] = []
     all_predictions: list[np.ndarray] = []
+    all_quantile_predictions: dict[str, list[np.ndarray]] | None = (
+        {label: [] for label in quantile_labels} if use_iqn else None
+    )
 
     for (
             input_features,
@@ -787,18 +949,53 @@ def run_eval_epoch(
                 input_lengths = input_lengths.to(device)
                 target_lengths = target_lengths.to(device)
             
-            predictions = model(
-                inputs,
-                input_timestamps,
-                input_lengths,
-                target_timestamps,
-                target_lengths,
-            )
+            if use_iqn:
+                taus = make_eval_iqn_taus(
+                    batch_size=targets.size(0),
+                    target_length=targets.size(1),
+                    num_samples=iqn_eval_samples,
+                    device=targets.device,
+                    dtype=targets.dtype,
+                )
+                model_output = model(
+                    inputs,
+                    input_timestamps,
+                    input_lengths,
+                    target_timestamps,
+                    target_lengths,
+                    taus,
+                )
+            else:
+                model_output = model(
+                    inputs,
+                    input_timestamps,
+                    input_lengths,
+                    target_timestamps,
+                    target_lengths,
+                )
             
-            loss = criterion(predictions, targets, target_lengths)  # LOSS COMPUTATION
+            loss = criterion(model_output, targets, target_lengths)  # LOSS COMPUTATION
             total_loss += loss.item()
             num_batches += 1
             progress_bar.set_postfix(loss=loss.item())
+
+            if use_iqn:
+                prediction_samples, _ = model_output
+                quantile_tensor = torch.tensor(
+                    iqn_quantile_levels,
+                    device=prediction_samples.device,
+                    dtype=prediction_samples.dtype,
+                )
+                quantile_values = torch.quantile(
+                    prediction_samples,
+                    quantile_tensor,
+                    dim=2,
+                )
+                median_index = quantile_labels.index("q50")
+                predictions_tensor = quantile_values[median_index]
+            else:
+                quantile_values = None
+                predictions_tensor = model_output
 
             contexts = [
                 denormalize_batch(
@@ -825,10 +1022,10 @@ def run_eval_epoch(
             
             predictions = [
                 denormalize_batch(
-                    predictions[i, : int(target_lengths[i].item())].cpu().numpy(),
+                    predictions_tensor[i, : int(target_lengths[i].item())].cpu().numpy(),
                     norm_statistics,
                 )
-                for i in range(predictions.size(0))
+                for i in range(predictions_tensor.size(0))
             ]
 
             all_contexts += contexts
@@ -836,6 +1033,22 @@ def run_eval_epoch(
             all_targets += targets
             all_target_timestamps += target_timestamps
             all_predictions += predictions
+            if use_iqn and quantile_values is not None and all_quantile_predictions is not None:
+                for quantile_index, label in enumerate(quantile_labels):
+                    quantile_batches = [
+                        denormalize_batch(
+                            quantile_values[
+                                quantile_index,
+                                i,
+                                : int(target_lengths[i].item()),
+                            ]
+                            .cpu()
+                            .numpy(),
+                            norm_statistics,
+                        )
+                        for i in range(quantile_values.size(1))
+                    ]
+                    all_quantile_predictions[label] += quantile_batches
 
     avg_loss = total_loss / num_batches
     return EvaluationResult(
@@ -845,6 +1058,8 @@ def run_eval_epoch(
         predictions=all_predictions,
         targets=all_targets,
         target_timestamps=all_target_timestamps,
+        quantile_predictions=all_quantile_predictions,
+        quantile_levels=iqn_quantile_levels if use_iqn else None,
     )
 
 
@@ -854,11 +1069,21 @@ def export_test_predictions_csv(
 ) -> None:
     """Exports denormalized test targets, predictions, and cumulative mean loss."""
 
+    quantile_labels = [
+        quantile_label(level) for level in (eval_result.quantile_levels or [])
+    ]
+    has_iqn_quantiles = bool(eval_result.quantile_predictions)
+    fieldnames = ["window_id", "step", "Y", "Y_hat", "loss", "loss_media_acumulada"]
+    if has_iqn_quantiles:
+        fieldnames += quantile_labels
+        fieldnames += ["interval_width_80", "interval_width_90"]
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as csv_file:
         writer = csv.DictWriter(
             csv_file,
-            fieldnames=["window_id", "step", "Y", "Y_hat", "loss", "loss_media_acumulada"],
+            fieldnames=fieldnames,
+            lineterminator="\n",
         )
         writer.writeheader()
 
@@ -875,16 +1100,27 @@ def export_test_predictions_csv(
                 loss = (y - y_hat) ** 2
                 cumulative_loss += loss
                 row_count += 1
-                writer.writerow(
-                    {
-                        "window_id": window_id,
-                        "step": step,
-                        "Y": y,
-                        "Y_hat": y_hat,
-                        "loss": loss,
-                        "loss_media_acumulada": cumulative_loss / row_count,
-                    }
-                )
+                row = {
+                    "window_id": window_id,
+                    "step": step,
+                    "Y": y,
+                    "Y_hat": y_hat,
+                    "loss": loss,
+                    "loss_media_acumulada": cumulative_loss / row_count,
+                }
+                if has_iqn_quantiles and eval_result.quantile_predictions is not None:
+                    for label in quantile_labels:
+                        row[label] = float(
+                            np.asarray(eval_result.quantile_predictions[label][window_id])[
+                                step,
+                                0,
+                            ]
+                        )
+                    if "q10" in row and "q90" in row:
+                        row["interval_width_80"] = float(row["q90"] - row["q10"])
+                    if "q05" in row and "q95" in row:
+                        row["interval_width_90"] = float(row["q95"] - row["q05"])
+                writer.writerow(row)
 
     print(f"Test predictions CSV saved to {output_path}")
 
@@ -911,6 +1147,76 @@ def calculate_regression_metrics(eval_result: EvaluationResult) -> dict[str, flo
     }
 
 
+def calculate_iqn_metrics(eval_result: EvaluationResult) -> dict[str, float]:
+    """Calculates probabilistic metrics from denormalized IQN quantiles."""
+
+    if not eval_result.quantile_predictions or not eval_result.quantile_levels:
+        return {}
+
+    y_true = np.concatenate([np.asarray(target)[:, 0] for target in eval_result.targets])
+    metrics: dict[str, float] = {}
+    quantile_losses = []
+    for level in eval_result.quantile_levels:
+        label = quantile_label(level)
+        q_pred = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions[label]
+            ]
+        )
+        errors = y_true - q_pred
+        quantile_losses.append(np.maximum(level * errors, (level - 1.0) * errors))
+
+    metrics["quantile_loss"] = float(np.mean(np.stack(quantile_losses, axis=0)))
+
+    if "q50" in eval_result.quantile_predictions:
+        q50 = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions["q50"]
+            ]
+        )
+        errors = y_true - q50
+        median_mse = float(np.mean(errors**2))
+        metrics["median_mse"] = median_mse
+        metrics["median_rmse"] = float(np.sqrt(median_mse))
+        metrics["median_mae"] = float(np.mean(np.abs(errors)))
+
+    if {"q10", "q90"}.issubset(eval_result.quantile_predictions):
+        q10 = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions["q10"]
+            ]
+        )
+        q90 = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions["q90"]
+            ]
+        )
+        metrics["coverage_80"] = float(np.mean((q10 <= y_true) & (y_true <= q90)))
+        metrics["interval_width_80"] = float(np.mean(q90 - q10))
+
+    if {"q05", "q95"}.issubset(eval_result.quantile_predictions):
+        q05 = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions["q05"]
+            ]
+        )
+        q95 = np.concatenate(
+            [
+                np.asarray(prediction)[:, 0]
+                for prediction in eval_result.quantile_predictions["q95"]
+            ]
+        )
+        metrics["coverage_90"] = float(np.mean((q05 <= y_true) & (y_true <= q95)))
+        metrics["interval_width_90"] = float(np.mean(q95 - q05))
+
+    return metrics
+
+
 def export_training_history_csv(
     train_losses: list[float],
     test_losses: list[float],
@@ -920,7 +1226,11 @@ def export_training_history_csv(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["epoch", "train_loss", "test_loss"])
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=["epoch", "train_loss", "test_loss"],
+            lineterminator="\n",
+        )
         writer.writeheader()
         for epoch, (train_loss, test_loss) in enumerate(
             zip(train_losses, test_losses), start=1
@@ -958,7 +1268,7 @@ def plot_results(
     ax.plot(range(1, epoch + 1), train_losses, label="Training Loss")
     ax.plot(range(1, epoch + 1), test_losses, label="Test Loss")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Normalized Loss (MSE)")
+    ax.set_ylabel("Normalized Loss")
     ax.set_title("Training and Test Loss Over Epochs")
     ax.legend()
     ax.grid(True)
@@ -1088,6 +1398,9 @@ def training_loop(
     view_size: int,
     early_stopping_patience: int,
     early_stopping_min_delta: float,
+    iqn_train_samples: int,
+    iqn_eval_samples: int,
+    iqn_quantile_levels: list[float],
 ) -> TrainingResult:
     """Runs the epoch loop and collects training metrics."""
 
@@ -1113,6 +1426,7 @@ def training_loop(
             optimizer=optimizer,
             criterion=criterion,
             device=device,
+            iqn_train_samples=iqn_train_samples,
         )
         if is_distributed():
             train_loss_tensor = torch.tensor(train_loss, device=device)
@@ -1132,6 +1446,8 @@ def training_loop(
                 criterion=criterion,
                 device=device,
                 norm_statistics=norm_statistics,
+                iqn_eval_samples=iqn_eval_samples,
+                iqn_quantile_levels=iqn_quantile_levels,
             )
 
             test_loss = eval_result.avg_loss
@@ -1216,9 +1532,50 @@ def criterion_without_padding(loss_func:torch.nn.Module) -> Callable[[torch.Tens
     
     return inner_func
 
+
+def quantile_loss_without_padding() -> Callable[[tuple[torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Computes masked pinball loss for IQN forecasts."""
+
+    def inner_func(
+        model_output: tuple[torch.Tensor, torch.Tensor],
+        targets: torch.Tensor,
+        lengths: torch.Tensor,
+    ) -> torch.Tensor:
+        predictions, taus = model_output
+        mask = (
+            torch.arange(predictions.size(1), device=predictions.device).unsqueeze(0)
+            < lengths.to(predictions.device).unsqueeze(1)
+        )
+        masked_predictions = predictions[mask]
+        masked_targets = targets[mask].unsqueeze(1)
+        masked_taus = taus[mask].unsqueeze(-1)
+        errors = masked_targets - masked_predictions
+        return torch.maximum(masked_taus * errors, (masked_taus - 1.0) * errors).mean()
+
+    return inner_func
+
+
+def parse_quantile_levels(value: str) -> list[float]:
+    """Parses comma-separated quantile levels and guarantees q50 is present."""
+
+    try:
+        levels = [float(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise ValueError("--iqn_quantiles must be a comma-separated list of floats.") from exc
+
+    if not levels:
+        raise ValueError("--iqn_quantiles must contain at least one quantile.")
+    if any(level <= 0.0 or level >= 1.0 for level in levels):
+        raise ValueError("--iqn_quantiles values must be in the open interval (0, 1).")
+    if not any(np.isclose(level, 0.5) for level in levels):
+        levels.append(0.5)
+    return sorted(set(round(level, 6) for level in levels))
+
 def main(args: argparse.Namespace) -> None:
     """Main function to run the training and evaluation."""
     set_global_seed(int(args.seed))
+    iqn_quantile_levels = parse_quantile_levels(args.iqn_quantiles)
+    use_iqn = args.model_variant == "gru_temporal_iqn"
     distributed, rank, local_rank, world_size = setup_distributed()
     cpu_count = os.cpu_count() or 1
     threads_per_process = (
@@ -1254,7 +1611,11 @@ def main(args: argparse.Namespace) -> None:
         f"weight_decay={args.weight_decay}, "
         f"sliding_window_step={args.sliding_window_step}, "
         f"early_stopping_patience={args.early_stopping_patience}, "
-        f"early_stopping_min_delta={args.early_stopping_min_delta}"
+        f"early_stopping_min_delta={args.early_stopping_min_delta}, "
+        f"iqn_train_samples={args.iqn_train_samples}, "
+        f"iqn_eval_samples={args.iqn_eval_samples}, "
+        f"iqn_tau_embedding_dim={args.iqn_tau_embedding_dim}, "
+        f"iqn_quantiles={iqn_quantile_levels}"
     )
 
     prepared_data = data_preparation(
@@ -1276,7 +1637,9 @@ def main(args: argparse.Namespace) -> None:
         hidden_size=args.hidden_size,
         pos_encoding_dim=args.pos_encoding_dim,
         time_scale=args.time_scale,
-        use_time_encoding=args.model_variant == "gru_temporal",
+        use_time_encoding=args.model_variant in {"gru_temporal", "gru_temporal_iqn"},
+        use_iqn=use_iqn,
+        iqn_tau_embedding_dim=args.iqn_tau_embedding_dim,
     ).to(device)
     initial_weights_path = ""
     if args.initial_weights_path:
@@ -1295,7 +1658,7 @@ def main(args: argparse.Namespace) -> None:
     elif cuda_count > 1:
         log("Multiple GPUs detected; launch with torchrun to use all GPUs safely.")
     
-    criterion = criterion_without_padding(nn.MSELoss())
+    criterion = quantile_loss_without_padding() if use_iqn else criterion_without_padding(nn.MSELoss())
     optimizer = optim.Adam(
         model.parameters(),
         lr=args.learning_rate,
@@ -1315,6 +1678,9 @@ def main(args: argparse.Namespace) -> None:
         view_size=view_size,
         early_stopping_patience=int(args.early_stopping_patience),
         early_stopping_min_delta=float(args.early_stopping_min_delta),
+        iqn_train_samples=int(args.iqn_train_samples),
+        iqn_eval_samples=int(args.iqn_eval_samples),
+        iqn_quantile_levels=iqn_quantile_levels,
     )
 
     # --- Save Model ---
@@ -1344,6 +1710,8 @@ def main(args: argparse.Namespace) -> None:
             criterion=criterion,
             device=device,
             norm_statistics=norm_statistics,
+            iqn_eval_samples=int(args.iqn_eval_samples),
+            iqn_quantile_levels=iqn_quantile_levels,
         )
         export_test_predictions_csv(
             eval_result=final_eval_result,
@@ -1355,6 +1723,7 @@ def main(args: argparse.Namespace) -> None:
             output_path=history_csv_path,
         )
         regression_metrics = calculate_regression_metrics(final_eval_result)
+        iqn_metrics = calculate_iqn_metrics(final_eval_result)
         selected_epoch_index = max(0, training_result.selected_model_epoch - 1)
         selected_train_loss = (
             training_result.train_losses[selected_epoch_index]
@@ -1384,10 +1753,15 @@ def main(args: argparse.Namespace) -> None:
             "sliding_window_step": int(args.sliding_window_step),
             "pos_encoding_dim": int(args.pos_encoding_dim),
             "time_scale": float(args.time_scale),
+            "iqn_train_samples": int(args.iqn_train_samples) if use_iqn else 0,
+            "iqn_eval_samples": int(args.iqn_eval_samples) if use_iqn else 0,
+            "iqn_tau_embedding_dim": int(args.iqn_tau_embedding_dim) if use_iqn else 0,
+            "iqn_quantiles": ",".join(f"{level:.2f}" for level in iqn_quantile_levels) if use_iqn else "",
             "final_train_loss": float(selected_train_loss),
             "final_test_loss": float(final_eval_result.avg_loss),
             "best_test_loss": float(training_result.best_test_loss),
             **regression_metrics,
+            **iqn_metrics,
         }
         export_metrics_json(metrics=metrics, output_path=metrics_json_path)
         plot_training_history(
@@ -1551,7 +1925,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_variant",
         type=str,
-        choices=["gru_base", "gru_temporal"],
+        choices=["gru_base", "gru_temporal", "gru_temporal_iqn"],
         default="gru_temporal",
         help="GRU model variant to train.",
     )
@@ -1593,10 +1967,40 @@ if __name__ == "__main__":
         default=DEFAULT_TIME_SCALE,
         help="Scale used to convert relative timestamps before sinusoidal encoding. Use 60.0 for hours if timestamps are in minutes.",
     )
+    parser.add_argument(
+        "--iqn_train_samples",
+        type=int,
+        default=DEFAULT_IQN_TRAIN_SAMPLES,
+        help="Number of tau samples per target point during IQN training.",
+    )
+    parser.add_argument(
+        "--iqn_eval_samples",
+        type=int,
+        default=DEFAULT_IQN_EVAL_SAMPLES,
+        help="Number of deterministic tau samples per target point during IQN evaluation.",
+    )
+    parser.add_argument(
+        "--iqn_tau_embedding_dim",
+        type=int,
+        default=DEFAULT_IQN_TAU_EMBEDDING_DIM,
+        help="Number of cosine basis terms used by the IQN tau embedding.",
+    )
+    parser.add_argument(
+        "--iqn_quantiles",
+        type=str,
+        default=DEFAULT_IQN_QUANTILES,
+        help="Comma-separated quantiles exported for IQN forecasts.",
+    )
 
     args = parser.parse_args()
     if args.early_stopping_patience < 0:
         parser.error("--early_stopping_patience must be >= 0.")
     if args.early_stopping_min_delta < 0.0:
         parser.error("--early_stopping_min_delta must be >= 0.0.")
+    if args.iqn_train_samples <= 0:
+        parser.error("--iqn_train_samples must be > 0.")
+    if args.iqn_eval_samples <= 0:
+        parser.error("--iqn_eval_samples must be > 0.")
+    if args.iqn_tau_embedding_dim <= 0:
+        parser.error("--iqn_tau_embedding_dim must be > 0.")
     main(args)
